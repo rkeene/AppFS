@@ -1,5 +1,7 @@
 CC = gcc
-LIBS = -lfuse
+PKG_CONFIG = pkg-config
+CFLAGS = $(shell $(PKG_CONFIG) --cflags fuse)
+LIBS = $(shell $(PKG_CONFIG) --libs fuse)
 PREFIX = /usr/local
 prefix = $(PREFIX)
 bindir = $(prefix)/bin
