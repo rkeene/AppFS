@@ -10,7 +10,6 @@ AppFS should normally be mounted on "/opt/appfs".
 /opt/appfs/hostname
 	Fetches: http://hostname/appfs/index
 	Contains CSV file: hash,extraData
-
 	Fetches: http://hostname/appfs/sha1/<hash>
 	Contains CSV file: package,version,os,cpuArch,sha1,isLatest
 
@@ -26,3 +25,8 @@ AppFS should normally be mounted on "/opt/appfs".
 /opt/appfs/hostname/{sha1,package/os-cpuArch/version}/file
 	Fetches: http://hostname/appfs/sha1/<sha1>
 
+Database
+--------
+    hostname_to_packages(hostname, sha1);
+    package_info(sha1 PRIMARY KEY, package, version, os, cpuArch, isLatest)
+    package_to_files(package_sha1, type, time, source, size, file_sha1, name)
