@@ -22,7 +22,7 @@ namespace eval ::appfs {
 
 		set file [file join $::appfs::cachedir $key]
 
-		file mkdir -- [file dirname $file]
+		file mkdir [file dirname $file]
 
 		if {![file exists $file]} {
 			set tmpfile "${file}.new"
