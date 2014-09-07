@@ -1,14 +1,22 @@
 CC = gcc
 PKG_CONFIG = pkg-config
-TCL_CFLAGS =
-TCL_LDFLAGS =
-TCL_LIBS = -ltcl
 CFLAGS = -Wall -g3 $(shell $(PKG_CONFIG) --cflags fuse) $(TCL_CFLAGS)
 LDFLAGS = $(TCL_LDFLAGS)
 LIBS = $(shell $(PKG_CONFIG) --libs fuse) $(TCL_LIBS)
 PREFIX = /usr/local
 prefix = $(PREFIX)
 bindir = $(prefix)/bin
+
+TCLKIT_SDK_DIR = $(shell pwd)/build/libtclkit-sdk-cvs_HEAD
+ifneq ($(TCLKIT_SDK_DIR),)
+TCLCONFIG_SH_PATH = $(TCLKIT_SDK_DIR)/lib/tclConfig.sh
+TCL_LDFLAGS = -Wl,-R,$(TCLKIT_SDK_DIR)/lib
+export TCLKIT_SDK_DIR
+else
+TCLCONFIG_SH_PATH = /usr/lib64/tclConfig.sh
+endif
+TCL_CFLAGS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_INCLUDE_SPEC}")
+TCL_LIBS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_LIB_SPEC}")
 
 all: appfs
 

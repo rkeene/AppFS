@@ -1,6 +1,6 @@
 #! /usr/bin/env tclsh
 
-package require http
+package require http 2.5
 
 namespace eval ::appfs {
 	variable sites [list]
