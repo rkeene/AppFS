@@ -117,6 +117,7 @@ static const char *appfs_convert_cpu_toString(appfs_cpuArch_t cpu) {
 
 static struct appfs_package *appfs_getindex(const char *hostname, int *package_count_p) {
 	Tcl_Obj *objv[2];
+	Tcl_Obj *packages_tcl;
 	int tcl_ret;
 
 	if (package_count_p == NULL) {
@@ -133,7 +134,7 @@ static struct appfs_package *appfs_getindex(const char *hostname, int *package_c
 		return(NULL);
 	}
 
-	printf("result: %s\n", Tcl_GetStringResult(interp));
+	packages_tcl = Tcl_GetObjResult(interp);
 
 	return(NULL);
 }
