@@ -16,6 +16,8 @@ if [ -z "${appfsdir}" ]; then
 	exit 1
 fi
 
+mkdir -p "${appfsdir}/sha1"
+
 function sha1() {
 	local filename
 
@@ -57,7 +59,16 @@ function emit_manifest() {
 				;;
 			file)
 				stat_format='%Y,%s'
-				extra_data="$(sha1 "${filename}")"
+				filename_hash="$(sha1 "${filename}")"
+				extra_data="${filename_hash}"
+
+				filename_intree="${appfsdir}/sha1/${filename_hash}"
+
+				if [ ! -e "${filename_intree}" ]; then
+					cat "${filename}" > "${filename_intree}.tmp"
+
+					mv "${filename_intree}.tmp" "${filename_intree}"
+				fi
 				;;
 		esac
 		stat_data="$(stat --format="${stat_format}" "${filename}")"
