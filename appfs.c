@@ -1,5 +1,6 @@
 #define FUSE_USE_VERSION 26
 
+#include <sqlite3.h>
 #include <string.h>
 #include <stdarg.h>
 #include <errno.h>
@@ -12,7 +13,12 @@
 
 #define APPFS_DEBUG(x...) { fprintf(stderr, "%i:%s: ", __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 
-Tcl_Interp *interp;
+struct appfs_thread_data {
+	Tcl_Interp *interp;
+	sqlite3 *db;
+};
+
+struct appfs_thread_data globalThread;
 
 typedef enum {
 	APPFS_OS_UNKNOWN,
@@ -149,9 +155,9 @@ static struct appfs_package *appfs_getindex(const char *hostname, int *package_c
 		return(NULL);
 	}
 
-	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getindex", hostname);
+	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 2, "::appfs::getindex", hostname);
 	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(interp));
+		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(globalThread.interp));
 
 		return(NULL);
 	}
@@ -222,40 +228,40 @@ int main(int argc, char **argv) {
 	const char *cachedir = APPFS_CACHEDIR;
 	int tcl_ret;
 
-	interp = Tcl_CreateInterp();
-	if (interp == NULL) {
+	globalThread.interp = Tcl_CreateInterp();
+	if (globalThread.interp == NULL) {
 		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
 
 		return(1);
 	}
 
-	tcl_ret = Tcl_Init(interp);
+	tcl_ret = Tcl_Init(globalThread.interp);
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
 
 		return(1);
 	}
 
-	tcl_ret = Tcl_Eval(interp, ""
+	tcl_ret = Tcl_Eval(globalThread.interp, ""
 #include "appfs.tcl.h"
 	"");
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(globalThread.interp));
 
 		return(1);
 	}
 
-	if (Tcl_SetVar(interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
+	if (Tcl_SetVar(globalThread.interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
 		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
 
 		return(1);
 	}
 
-	tcl_ret = appfs_Tcl_Eval(interp, 1, "::appfs::init");
+	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 1, "::appfs::init");
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(globalThread.interp));
 
 		return(1);
 	}
