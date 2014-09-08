@@ -65,6 +65,17 @@ namespace eval ::appfs {
 		_db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, file_sha1, file_name, file_directory);}
 	}
 
+	proc download {hostname hash {method sha1}} {
+		set url "http://$hostname/appfs/$method/$hash"
+		set file [_cachefile $url $hash]
+
+		if {![file exists $file]} {
+			return -code error "Unable to fetch"
+		}
+
+		return $file
+	}
+
 	proc getindex {hostname} {
 		if {[string match "*\[/~\]*" $hostname]} {
 			return -code error "Invalid hostname"
@@ -133,59 +144,52 @@ namespace eval ::appfs {
 
 			_db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest) );}
 
-			set file [download $hostname $pkgInfo(hash)]
-			set fd [open $file]
-			set pkgdata [read $fd]
-			close $fd
-
-			foreach line [split $pkgdata "\n"] {
-				set line [string trim $line]
-
-				if {[string match "*/*" $line]} {
-					continue
-				}
-
-				if {$line == ""} {
-					continue
-				}
-
-				set work [split $line ","]
-
-				unset -nocomplain fileInfo
-				set fileInfo(type) [lindex $work 0]
-				set fileInfo(time) [lindex $work 1]
-				set fileInfo(name) [lindex $work end]
-
-				set fileInfo(name) [split [string trim $fileInfo(name) "/"] "/"]
-				set fileInfo(directory) [join [lrange $fileInfo(name) 0 end-1] "/"]
-				set fileInfo(name) [lindex $fileInfo(name) end]
-
-				set work [lrange $work 2 end-1]
-				switch -- $fileInfo(type) {
-					"file" {
-						set fileInfo(size) [lindex $work 0]
-						set fileInfo(sha1) [lindex $work 1]
-					}
-					"symlink" {
-						set fileInfo(source) [lindex $work 0]
-					}
-				}
-
-				_db eval {INSERT INTO files (package_sha1, type, time, source, size, file_sha1, file_name, file_directory) VALUES ($pkgInfo(hash), $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
-			}
 		}
 
 		return COMPLETE
 	}
 
-	proc download {hostname hash {method sha1}} {
-		set url "http://$hostname/appfs/$method/$hash"
-		set file [_cachefile $url $hash]
+	proc getpkgmanifest {hostname package_sha1} {
+		set file [download $hostname $package_sha1]
+		set fd [open $file]
+		set pkgdata [read $fd]
+		close $fd
 
-		if {![file exists $file]} {
-			return -code error "Unable to fetch"
+		foreach line [split $pkgdata "\n"] {
+			set line [string trim $line]
+
+			if {[string match "*/*" $line]} {
+				continue
+			}
+
+			if {$line == ""} {
+				continue
+			}
+
+			set work [split $line ","]
+
+			unset -nocomplain fileInfo
+			set fileInfo(type) [lindex $work 0]
+			set fileInfo(time) [lindex $work 1]
+			set fileInfo(name) [lindex $work end]
+
+			set fileInfo(name) [split [string trim $fileInfo(name) "/"] "/"]
+			set fileInfo(directory) [join [lrange $fileInfo(name) 0 end-1] "/"]
+			set fileInfo(name) [lindex $fileInfo(name) end]
+
+			set work [lrange $work 2 end-1]
+			switch -- $fileInfo(type) {
+				"file" {
+					set fileInfo(size) [lindex $work 0]
+					set fileInfo(sha1) [lindex $work 1]
+				}
+				"symlink" {
+					set fileInfo(source) [lindex $work 0]
+				}
+			}
+
+			_db eval {INSERT INTO files (package_sha1, type, time, source, size, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
 		}
-
-		return $file
 	}
+
 }
