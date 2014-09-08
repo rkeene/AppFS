@@ -226,7 +226,8 @@ static struct fuse_operations appfs_oper = {
 
 int main(int argc, char **argv) {
 	const char *cachedir = APPFS_CACHEDIR;
-	int tcl_ret;
+	char dbfilename[1024];
+	int tcl_ret, snprintf_ret, sqlite_ret;
 
 	globalThread.interp = Tcl_CreateInterp();
 	if (globalThread.interp == NULL) {
@@ -262,6 +263,20 @@ int main(int argc, char **argv) {
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(globalThread.interp));
+
+		return(1);
+	}
+
+	snprintf_ret = snprintf(dbfilename, sizeof(dbfilename), "%s/%s", cachedir, "cache.db");
+	if (snprintf_ret >= sizeof(dbfilename)) {
+		fprintf(stderr, "Unable to set database filename.  Aborting.\n");
+
+		return(1);
+	}
+
+	sqlite_ret = sqlite3_open(dbfilename, &globalThread.db);
+	if (sqlite_ret != SQLITE_OK) {
+		fprintf(stderr, "Unable to open database: %s\n", dbfilename);
 
 		return(1);
 	}
