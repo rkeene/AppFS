@@ -41,9 +41,13 @@ typedef enum {
 struct appfs_package {
 	char name[128];
 	char version[64];
+	char sha1[41];
 	appfs_os_t os;
 	appfs_cpuArch_t cpuArch;
 	int isLatest;
+
+	int counter;
+	struct appfs_package *_next;
 };
 
 static appfs_os_t appfs_convert_os_fromString(const char *os) {
@@ -83,7 +87,7 @@ static const char *appfs_convert_os_toString(appfs_os_t os) {
 	return("unknown");
 }
 
-static appfs_cpuArch_t appfs_convert_cpu_fromString(const char *cpu) {
+static appfs_cpuArch_t appfs_convert_cpuArch_fromString(const char *cpu) {
 	if (strcasecmp(cpu, "amd64") == 0 || strcasecmp(cpu, "x86_64") == 0) {
 		return(APPFS_CPU_AMD64);
 	}
@@ -107,7 +111,7 @@ static appfs_cpuArch_t appfs_convert_cpu_fromString(const char *cpu) {
 	return(APPFS_CPU_UNKNOWN);
 }
 
-static const char *appfs_convert_cpu_toString(appfs_cpuArch_t cpu) {
+static const char *appfs_convert_cpuArch_toString(appfs_cpuArch_t cpu) {
 	switch (cpu) {
 		case APPFS_CPU_ALL:
 			return("noarch");
@@ -148,8 +152,38 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	return(retval);
 }
 
+int appfs_getindex_cb(void *_head, int columns, char **values, char **names) {
+	struct appfs_package **head = _head, *obj;
+
+	obj = (void *) ckalloc(sizeof(*obj));
+
+	snprintf(obj->name, sizeof(obj->name), "%s", values[0]);
+	snprintf(obj->version, sizeof(obj->version), "%s", values[1]);
+	snprintf(obj->sha1, sizeof(obj->sha1), "%s", values[2]);
+	obj->os = appfs_convert_os_fromString(values[3]);
+	obj->cpuArch = appfs_convert_cpuArch_fromString(values[4]);
+	if (values[5][0] == '1') {
+		obj->isLatest = 1;
+	} else {
+		obj->isLatest = 0;
+	}
+
+	if (*head == NULL) {
+		obj->counter = 0;
+	} else {
+		obj->counter = (*head)->counter + 1;
+	}
+
+	obj->_next = *head;
+	*head = obj;
+
+	return(0);
+}
+
 static struct appfs_package *appfs_getindex(const char *hostname, int *package_count_p) {
-	int tcl_ret;
+	struct appfs_package *head = NULL;
+	char *sql;
+	int tcl_ret, sqlite_ret;
 
 	if (package_count_p == NULL) {
 		return(NULL);
@@ -162,19 +196,50 @@ static struct appfs_package *appfs_getindex(const char *hostname, int *package_c
 		return(NULL);
 	}
 
-	return(NULL);
+	sql = sqlite3_mprintf("SELECT package, version, sha1, os, cpuArch, isLatest FROM packages WHERE hostname = %Q;", hostname);
+	if (sql == NULL) {
+		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
+
+		return(NULL);
+	}
+
+	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getindex_cb, &head, NULL);
+	sqlite3_free(sql);
+
+	if (sqlite_ret != SQLITE_OK) {
+		APPFS_DEBUG("Call to sqlite3_exec failed.");
+
+		return(NULL);
+	}
+
+	if (head != NULL) {
+		*package_count_p = head->counter + 1;
+	}
+
+	return(head);
 }
 
 static int appfs_getfile(const char *hostname, const char *sha1) {
+	return(0);
 }
 
 static int appfs_getmanifest(const char *hostname, const char *sha1) {
+	return(0);
 }
 
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
+	char *hostname;
 	int res = 0;
 
+	if (path == NULL) {
+		return(-ENOENT);
+	}
+
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	if (path[0] != '/') {
+		return(-ENOENT);
+	}
 
 	memset(stbuf, 0, sizeof(struct stat));
 
@@ -203,7 +268,7 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 
 #ifdef APPFS_TEST_DRIVER
 static int appfs_test_driver(void) {
-	struct appfs_package *packages;
+	struct appfs_package *packages, *package;
 	int packages_count = 0;
 
 	packages = appfs_getindex("rkeene.org", &packages_count);
@@ -213,16 +278,26 @@ static int appfs_test_driver(void) {
 		return(1);
 	}
 
+	for (package = packages; package; package = package->_next) {
+		printf("Package:\n\tname = %s\n\tversion = %s\n\tsha1 = %s\n\tos = %s\n\tcpuArch = %s\n",
+			package->name,
+			package->version,
+			package->sha1,
+			appfs_convert_os_toString(package->os),
+			appfs_convert_cpuArch_toString(package->cpuArch)
+		);
+	}
+
 	return(0);
 }
-#endif
-
+#else
 static struct fuse_operations appfs_oper = {
 	.getattr	= appfs_fuse_getattr,
 	.readdir	= appfs_fuse_readdir,
 	.open		= appfs_fuse_open,
 	.read		= appfs_fuse_read
 };
+#endif
 
 int main(int argc, char **argv) {
 	const char *cachedir = APPFS_CACHEDIR;
