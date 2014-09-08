@@ -39,22 +39,22 @@ typedef enum {
 } appfs_cpuArch_t;
 
 struct appfs_package {
+	struct appfs_package *_next;
+	int counter;
+
 	char name[128];
 	char version[64];
 	char sha1[41];
 	appfs_os_t os;
 	appfs_cpuArch_t cpuArch;
 	int isLatest;
-
-	int counter;
-	struct appfs_package *_next;
 };
 
 struct appfs_site {
-	char name[256];
-
-	int counter;
 	struct appfs_site *_next;
+	int counter;
+
+	char name[256];
 };
 
 static appfs_os_t appfs_convert_os_fromString(const char *os) {
@@ -158,6 +158,18 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 
 	return(retval);
 }
+
+#define appfs_free_list_type(id, type) static void appfs_free_list_ ## id(type *head) { \
+	type *obj, *next; \
+	for (obj = head; obj; obj = next) { \
+		next = obj->_next; \
+		ckfree((void *) obj); \
+	} \
+}
+
+appfs_free_list_type(site, struct appfs_site)
+appfs_free_list_type(package, struct appfs_package)
+
 
 static int appfs_getsites_cb(void *_head, int columns, char **values, char **names) {
 	struct appfs_site **head_p, *obj;
@@ -278,12 +290,9 @@ static int appfs_getmanifest(const char *hostname, const char *sha1) {
 	return(0);
 }
 
-static int appfs_fuse_getattr(const char *_path, struct stat *stbuf) {
+#if 0
+static int appfs_parse_path(const char *_path, struct appfs_path *pathinfo) {
 	char *path;
-	char *hostname, *package;
-	int res = 0;
-
-	APPFS_DEBUG("Enter (path = %s, ...)", _path);
 
 	if (_path == NULL) {
 		return(-ENOENT);
@@ -301,6 +310,25 @@ static int appfs_fuse_getattr(const char *_path, struct stat *stbuf) {
 
 	hostname = path + 1;
 	package = strchr(hostname, '/');
+
+	if (package == NULL) {
+		/* Request for a single hostname */
+	}
+
+
+}
+#else
+static int appfs_parse_path(const char *_path) {
+	return(0);
+}
+#endif
+
+static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
+	int res = 0;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	res = appfs_parse_path(path);
 
 	memset(stbuf, 0, sizeof(struct stat));
 
@@ -339,6 +367,8 @@ static int appfs_test_driver(void) {
 		printf("\tname = %s\n", site->name);
 	}
 
+	appfs_free_list_site(sites);
+
 	packages = appfs_getindex("rkeene.org", &packages_count);
 	if (packages == NULL || packages_count == 0) {
 		fprintf(stderr, "Unable to fetch package index from rkeene.org.\n");
@@ -355,6 +385,8 @@ static int appfs_test_driver(void) {
 			appfs_convert_cpuArch_toString(package->cpuArch)
 		);
 	}
+
+	appfs_free_list_package(packages);
 
 	return(0);
 }
