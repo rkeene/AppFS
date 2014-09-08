@@ -27,5 +27,5 @@ Paths
 
 Database
 --------
-    hostname_to_packages(hostname, sha1, package, version, os, cpuArch, isLatest)
-    package_to_files(package_sha1, type, time, source, size, file_sha1, name)
+    packages(hostname, sha1, package, version, os, cpuArch, isLatest)
+    files(package_sha1, type, time, source, size, file_sha1, file_name, file_directory)

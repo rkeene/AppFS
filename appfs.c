@@ -1,6 +1,7 @@
 #define FUSE_USE_VERSION 26
 
 #include <string.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -115,26 +116,43 @@ static const char *appfs_convert_cpu_toString(appfs_cpuArch_t cpu) {
 	return("unknown");
 }
 
+static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
+	Tcl_Obj **objv;
+	const char *arg;
+	va_list argp;
+	int retval;
+	int i;
+
+	objv = ckalloc(sizeof(*objv) * objc);
+	objv[0] = Tcl_NewStringObj(cmd, -1);
+
+	va_start(argp, cmd);
+	for (i = 1; i < objc; i++) {
+		arg = va_arg(argp, const char *);
+		objv[i] = Tcl_NewStringObj(arg, -1);
+	}
+	va_end(argp);
+
+	retval = Tcl_EvalObjv(interp, objc, objv, 0);
+
+	ckfree(objv);
+
+	return(retval);
+}
+
 static struct appfs_package *appfs_getindex(const char *hostname, int *package_count_p) {
-	Tcl_Obj *objv[2];
-	Tcl_Obj *packages_tcl;
 	int tcl_ret;
 
 	if (package_count_p == NULL) {
 		return(NULL);
 	}
 
-	objv[0] = Tcl_NewStringObj("::appfs::getindex", -1);
-	objv[1] = Tcl_NewStringObj(hostname, -1);
-
-	tcl_ret = Tcl_EvalObjv(interp, 2, objv, 0);
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getindex", hostname);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(interp));
 
 		return(NULL);
 	}
-
-	packages_tcl = Tcl_GetObjResult(interp);
 
 	return(NULL);
 }
@@ -219,7 +237,15 @@ int main(int argc, char **argv) {
 #include "appfs.tcl.h"
 	"");
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl AppFS Script.  Aborting.\n");
+		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
+
+		return(1);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 1, "::appfs::init");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
 		return(1);
 	}
