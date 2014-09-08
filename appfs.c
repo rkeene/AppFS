@@ -127,7 +127,7 @@ static struct appfs_package *appfs_getindex(const char *hostname, int *package_c
 	objv[0] = Tcl_NewStringObj("::appfs::getindex", -1);
 	objv[1] = Tcl_NewStringObj(hostname, -1);
 
-	tcl_ret = Tcl_EvalObjv(interp, 2, &objv, 0);
+	tcl_ret = Tcl_EvalObjv(interp, 2, objv, 0);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(interp));
 

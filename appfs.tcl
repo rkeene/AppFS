@@ -1,6 +1,7 @@
 #! /usr/bin/env tclsh
 
-package require http 2.5
+package require http 2.7
+package require sqlite3
 
 namespace eval ::appfs {
 	variable sites [list]

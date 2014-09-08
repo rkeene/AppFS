@@ -13,7 +13,7 @@ TCLCONFIG_SH_PATH = $(TCLKIT_SDK_DIR)/lib/tclConfig.sh
 TCL_LDFLAGS = -Wl,-R,$(TCLKIT_SDK_DIR)/lib
 export TCLKIT_SDK_DIR
 else
-TCLCONFIG_SH_PATH = /usr/lib64/tclConfig.sh
+TCLCONFIG_SH_PATH = $(shell echo 'puts [::tcl::pkgconfig get libdir,install]' | tclsh)/tclConfig.sh
 endif
 TCL_CFLAGS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_INCLUDE_SPEC}")
 TCL_LIBS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_LIB_SPEC}")
