@@ -50,6 +50,13 @@ struct appfs_package {
 	struct appfs_package *_next;
 };
 
+struct appfs_site {
+	char name[256];
+
+	int counter;
+	struct appfs_site *_next;
+};
+
 static appfs_os_t appfs_convert_os_fromString(const char *os) {
 	if (strcasecmp(os, "Linux") == 0) {
 		return(APPFS_OS_LINUX);
@@ -152,8 +159,52 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	return(retval);
 }
 
-int appfs_getindex_cb(void *_head, int columns, char **values, char **names) {
-	struct appfs_package **head = _head, *obj;
+static int appfs_getsites_cb(void *_head, int columns, char **values, char **names) {
+	struct appfs_site **head_p, *obj;
+
+	head_p = _head;
+
+	obj = (void *) ckalloc(sizeof(*obj));
+	snprintf(obj->name, sizeof(obj->name), "%s", values[0]);
+
+	if (*head_p == NULL) {
+		obj->counter = 0;
+	} else {
+		obj->counter = (*head_p)->counter + 1;
+	}
+
+	obj->_next = *head_p;
+	*head_p = obj;
+
+	return(0);
+}
+
+static struct appfs_site *appfs_getsites(int *site_count_p) {
+	struct appfs_site *head = NULL;
+	int sqlite_ret;
+
+	if (site_count_p == NULL) {
+		return(NULL);
+	}
+
+	sqlite_ret = sqlite3_exec(globalThread.db, "SELECT DISTINCT hostname FROM packages;", appfs_getsites_cb, &head, NULL);
+	if (sqlite_ret != SQLITE_OK) {
+		APPFS_DEBUG("Call to sqlite3_exec failed.");
+
+		return(NULL);
+	}
+
+	if (head != NULL) {
+		*site_count_p = head->counter + 1;
+	}
+
+	return(head);
+}
+
+static int appfs_getindex_cb(void *_head, int columns, char **values, char **names) {
+	struct appfs_package **head_p, *obj;
+
+	head_p = _head;
 
 	obj = (void *) ckalloc(sizeof(*obj));
 
@@ -168,14 +219,14 @@ int appfs_getindex_cb(void *_head, int columns, char **values, char **names) {
 		obj->isLatest = 0;
 	}
 
-	if (*head == NULL) {
+	if (*head_p == NULL) {
 		obj->counter = 0;
 	} else {
-		obj->counter = (*head)->counter + 1;
+		obj->counter = (*head_p)->counter + 1;
 	}
 
-	obj->_next = *head;
-	*head = obj;
+	obj->_next = *head_p;
+	*head_p = obj;
 
 	return(0);
 }
@@ -227,19 +278,29 @@ static int appfs_getmanifest(const char *hostname, const char *sha1) {
 	return(0);
 }
 
-static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
-	char *hostname;
+static int appfs_fuse_getattr(const char *_path, struct stat *stbuf) {
+	char *path;
+	char *hostname, *package;
 	int res = 0;
 
-	if (path == NULL) {
+	APPFS_DEBUG("Enter (path = %s, ...)", _path);
+
+	if (_path == NULL) {
 		return(-ENOENT);
 	}
 
-	APPFS_DEBUG("Enter (path = %s, ...)", path);
-
-	if (path[0] != '/') {
+	if (_path[0] != '/') {
 		return(-ENOENT);
 	}
+
+	if (_path[1] == '\0') {
+		/* Request for the root directory */
+	}
+
+	path = strdup(_path);
+
+	hostname = path + 1;
+	package = strchr(hostname, '/');
 
 	memset(stbuf, 0, sizeof(struct stat));
 
@@ -268,8 +329,15 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 
 #ifdef APPFS_TEST_DRIVER
 static int appfs_test_driver(void) {
+	struct appfs_site *sites, *site;
 	struct appfs_package *packages, *package;
-	int packages_count = 0;
+	int packages_count = 0, sites_count = 0;
+
+	sites = appfs_getsites(&sites_count);
+	printf("Sites:\n");
+	for (site = sites; site; site = site->_next) {
+		printf("\tname = %s\n", site->name);
+	}
 
 	packages = appfs_getindex("rkeene.org", &packages_count);
 	if (packages == NULL || packages_count == 0) {
