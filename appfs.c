@@ -123,7 +123,7 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	int retval;
 	int i;
 
-	objv = ckalloc(sizeof(*objv) * objc);
+	objv = (void *) ckalloc(sizeof(*objv) * objc);
 	objv[0] = Tcl_NewStringObj(cmd, -1);
 
 	va_start(argp, cmd);
@@ -135,7 +135,7 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 
 	retval = Tcl_EvalObjv(interp, objc, objv, 0);
 
-	ckfree(objv);
+	ckfree((void *) objv);
 
 	return(retval);
 }
