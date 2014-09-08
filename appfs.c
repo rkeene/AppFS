@@ -8,6 +8,8 @@
 #include <fuse.h>
 #include <tcl.h>
 
+#define APPFS_CACHEDIR "/tmp/appfs-cache"
+
 #define APPFS_DEBUG(x...) { fprintf(stderr, "%i:%s: ", __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 
 Tcl_Interp *interp;
@@ -163,7 +165,7 @@ static int appfs_getfile(const char *hostname, const char *sha1) {
 static int appfs_getmanifest(const char *hostname, const char *sha1) {
 }
 
-static int appfs_getattr(const char *path, struct stat *stbuf) {
+static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	int res = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
@@ -176,7 +178,7 @@ static int appfs_getattr(const char *path, struct stat *stbuf) {
 	return res;
 }
 
-static int appfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
+static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
 	filler(buf, ".", NULL, 0);
@@ -185,11 +187,11 @@ static int appfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, of
 	return 0;
 }
 
-static int appfs_open(const char *path, struct fuse_file_info *fi) {
+static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 	return(-ENOENT);
 }
 
-static int appfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
 	return(-ENOENT);
 }
 
@@ -210,13 +212,14 @@ static int appfs_test_driver(void) {
 #endif
 
 static struct fuse_operations appfs_oper = {
-	.getattr	= appfs_getattr,
-	.readdir	= appfs_readdir,
-	.open		= appfs_open,
-	.read		= appfs_read,
+	.getattr	= appfs_fuse_getattr,
+	.readdir	= appfs_fuse_readdir,
+	.open		= appfs_fuse_open,
+	.read		= appfs_fuse_read
 };
 
 int main(int argc, char **argv) {
+	const char *cachedir = APPFS_CACHEDIR;
 	int tcl_ret;
 
 	interp = Tcl_CreateInterp();
@@ -238,6 +241,13 @@ int main(int argc, char **argv) {
 	"");
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		return(1);
+	}
+
+	if (Tcl_SetVar(interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
+		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
 
 		return(1);
 	}
