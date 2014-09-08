@@ -7,7 +7,6 @@ PREFIX = /usr/local
 prefix = $(PREFIX)
 bindir = $(prefix)/bin
 
-TCLKIT_SDK_DIR = $(shell pwd)/build/libtclkit-sdk-cvs_HEAD
 ifneq ($(TCLKIT_SDK_DIR),)
 TCLCONFIG_SH_PATH = $(TCLKIT_SDK_DIR)/lib/tclConfig.sh
 TCL_LDFLAGS = -Wl,-R,$(TCLKIT_SDK_DIR)/lib
