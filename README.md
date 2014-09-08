@@ -27,5 +27,5 @@ Paths
 
 Database
 --------
-    packages(hostname, sha1, package, version, os, cpuArch, isLatest)
+    packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest)
     files(package_sha1, type, time, source, size, file_sha1, file_name, file_directory)

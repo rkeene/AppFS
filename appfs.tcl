@@ -61,7 +61,7 @@ namespace eval ::appfs {
 			sqlite3 ::appfs::db [file join $::appfs::cachedir cache.db]
 		}
 
-		_db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest);}
+		_db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest);}
 		_db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, file_sha1, file_name, file_directory);}
 	}
 
@@ -142,7 +142,7 @@ namespace eval ::appfs {
 				_db eval {UPDATE packages SET isLatest = 0 WHERE hostname = $hostname AND package = $pkgInfo($package) AND os = $pkgInfo($package) AND cpuArch = $pkgInfo(cpuArch);}
 			}
 
-			_db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest) );}
+			_db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
 
 		}
 
@@ -150,6 +150,13 @@ namespace eval ::appfs {
 	}
 
 	proc getpkgmanifest {hostname package_sha1} {
+		set haveManifests [_db eval {SELECT haveManifest FROM packages WHERE sha1 = $package_sha1 LIMIT 1;}]
+		set haveManifest [lindex $haveManifests 0]
+
+		if {$haveManifest} {
+			return COMPLETE
+		}
+
 		set file [download $hostname $package_sha1]
 		set fd [open $file]
 		set pkgdata [read $fd]
@@ -189,7 +196,9 @@ namespace eval ::appfs {
 			}
 
 			_db eval {INSERT INTO files (package_sha1, type, time, source, size, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
+			_db eval {UPDATE packages SET haveManifest = 1 WHERE sha1 = $package_sha1;}
 		}
-	}
 
+		return COMPLETE
+	}
 }
