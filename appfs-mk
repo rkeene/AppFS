@@ -1,0 +1,118 @@
+#! /usr/bin/env bash
+
+pkgsdir="$1"
+appfsdir="$2"
+
+if [ -z  "${pkgsdir}" -o -z "${appfsdir}" ]; then
+	echo 'Usage: appfs-mk <pkgsdir> <appfsdir>' >&2
+
+	exit 1
+fi
+
+appfsdir="$(cd "${appfsdir}" && pwd)"
+if [ -z "${appfsdir}" ]; then
+	echo "Unable to find appfs directory." >&2
+
+	exit 1
+fi
+
+function sha1() {
+	local filename
+
+	filename="$1"
+
+	openssl sha1 "${filename}" | sed 's@.*= @@'
+}
+
+function emit_manifest() {
+	find . -print0 | while IFS='' read -r -d $'\0' filename; do
+		if [ "${filename}" = '.' ]; then
+			continue
+		fi
+
+		filename="$(echo "${filename}" | sed 's@^\./@@' | head -n 1)"
+
+		if [ ! -e "${filename}" ]; then
+			continue
+		fi
+
+		if [ -h "${filename}" ]; then
+			type='symlink'
+		elif [ -d "${filename}" ]; then
+			type='directory'
+		elif [ -f "${filename}" ]; then
+			type='file'
+		else
+			continue
+		fi
+
+		case "${type}" in
+			directory)
+				stat_format='%Y'
+				extra_data=''
+				;;
+			symlink)
+				stat_format='%Y'
+				extra_data="$(readlink "${filename}")"
+				;;
+			file)
+				stat_format='%Y,%s'
+				extra_data="$(sha1 "${filename}")"
+				;;
+		esac
+		stat_data="$(stat --format="${stat_format}" "${filename}")"
+
+		if [ -z "${extra_data}" ]; then
+			echo "${type},${stat_data},${extra_data},${filename}"
+		else
+			echo "${type},${stat_data},${extra_data},${filename}"
+		fi
+	done
+}
+
+cd "${pkgsdir}" || exit 1
+
+for package in *; do
+	packagelistfile="${appfsdir}/sha1/${RANDOM}${RANDOM}${RANDOM}${RANDOM}${RANDOM}.tmp"
+	(
+		cd "${package}" || exit 1
+
+		for os_cpuArch in *; do
+			os="$(echo "${os_cpuArch}" | cut -f 1 -d '-')"
+			cpuArch="$(echo "${os_cpuArch}" | cut -f 2- -d '-')"
+
+			(
+				cd "${os_cpuArch}" || exit 1
+
+
+				for version in *; do
+					if [ -h "${version}" ]; then
+						continue
+					fi
+
+					manifestfile="${appfsdir}/sha1/${RANDOM}${RANDOM}${RANDOM}${RANDOM}${RANDOM}.tmp"
+
+					(
+						cd "${version}" || exit 1
+
+						emit_manifest
+					) > "${manifestfile}"
+
+					manifestfile_hash="$(sha1 "${manifestfile}")"
+					mv "${manifestfile}" "${appfsdir}/sha1/${manifestfile_hash}"
+
+					# XXX:TODO: Determine if this is the latest version
+					isLatest='0'
+
+					echo "${package},${version},${os},${cpuArch},${manifestfile_hash},${isLatest}"
+				done
+
+			)
+		done
+	) > "${packagelistfile}"
+
+	packagelistfile_hash="$(sha1 "${packagelistfile}")"
+	mv "${packagelistfile}" "${appfsdir}/sha1/${packagelistfile_hash}"
+
+	echo "${packagelistfile_hash},sha1" > "${appfsdir}/index"
+done
