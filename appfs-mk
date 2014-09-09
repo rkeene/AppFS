@@ -58,9 +58,15 @@ function emit_manifest() {
 				extra_data="$(readlink "${filename}")"
 				;;
 			file)
+				if [ -x "${filename}" ]; then
+					extra_data='x'
+				else
+					extra_data=''
+				fi
+
 				stat_format='%Y,%s'
 				filename_hash="$(sha1 "${filename}")"
-				extra_data="${filename_hash}"
+				extra_data="${extra_data},${filename_hash}"
 
 				filename_intree="${appfsdir}/sha1/${filename_hash}"
 

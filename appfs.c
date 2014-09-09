@@ -457,19 +457,35 @@ static char *appfs_lookup_package_hash(const char *hostname, const char *package
 
 static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, char **names) {
 	struct appfs_pathinfo *pathinfo = _pathinfo;
-	const char *type, *time, *source, *size;
+	const char *type, *time, *source, *size, *perms, *sha1;
 
 	type = values[0];
 	time = values[1];
 	source = values[2];
 	size = values[3];
+	perms = values[4];
+	sha1 = values[5];
 
 	pathinfo->time = strtoull(time, NULL, 10);
 
 	if (strcmp(type, "file") == 0) {
 		pathinfo->type = APPFS_PATHTYPE_FILE;
-		pathinfo->typeinfo.file.executable = 0;
+
+		if (!size) {
+			size = "0";
+		}
+
+		if (!perms) {
+			perms = "";
+		}
+
 		pathinfo->typeinfo.file.size = strtoull(size, NULL, 10);
+
+		if (strcmp(perms, "x") == 0) {
+			pathinfo->typeinfo.file.executable = 1;
+		} else {
+			pathinfo->typeinfo.file.executable = 0;
+		}
 
 		return(0);
 	}
@@ -517,7 +533,7 @@ static int appfs_getfileinfo(const char *hostname, const char *package_hash, con
 		file++;
 	}
 
-	sql = sqlite3_mprintf("SELECT type, time, source, size FROM files WHERE package_sha1 = %Q AND file_directory = %Q AND file_name = %Q;", package_hash, directory, file);
+	sql = sqlite3_mprintf("SELECT type, time, source, size, perms, file_sha1 FROM files WHERE package_sha1 = %Q AND file_directory = %Q AND file_name = %Q;", package_hash, directory, file);
 	if (sql == NULL) {
 		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
 

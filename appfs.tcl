@@ -62,7 +62,7 @@ namespace eval ::appfs {
 		}
 
 		_db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest);}
-		_db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, file_sha1, file_name, file_directory);}
+		_db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory);}
 	}
 
 	proc download {hostname hash {method sha1}} {
@@ -184,14 +184,15 @@ namespace eval ::appfs {
 			switch -- $fileInfo(type) {
 				"file" {
 					set fileInfo(size) [lindex $work 0]
-					set fileInfo(sha1) [lindex $work 1]
+					set fileInfo(perms) [lindex $work 1]
+					set fileInfo(sha1) [lindex $work 2]
 				}
 				"symlink" {
 					set fileInfo(source) [lindex $work 0]
 				}
 			}
 
-			_db eval {INSERT INTO files (package_sha1, type, time, source, size, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
+			_db eval {INSERT INTO files (package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(perms), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
 			_db eval {UPDATE packages SET haveManifest = 1 WHERE sha1 = $package_sha1;}
 		}
 

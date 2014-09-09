@@ -20,7 +20,7 @@ Paths
     		type,time,extraData,name
     		type == directory; extraData = (null)
     		type == symlink; extraData = source
-    		type == file; extraData = size,sha1
+    		type == file; extraData = size,perms,sha1
 
     /opt/appfs/hostname/{sha1,package/os-cpuArch/version}/file
     	Fetches: http://hostname/appfs/sha1/<sha1>
@@ -28,4 +28,4 @@ Paths
 Database
 --------
     packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest)
-    files(package_sha1, type, time, source, size, file_sha1, file_name, file_directory)
+    files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory)
