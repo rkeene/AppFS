@@ -165,10 +165,6 @@ namespace eval ::appfs {
 		foreach line [split $pkgdata "\n"] {
 			set line [string trim $line]
 
-			if {[string match "*/*" $line]} {
-				continue
-			}
-
 			if {$line == ""} {
 				continue
 			}

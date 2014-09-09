@@ -3,6 +3,7 @@
 #include <sqlite3.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -11,7 +12,7 @@
 
 #define APPFS_CACHEDIR "/tmp/appfs-cache"
 
-#define APPFS_DEBUG(x...) { fprintf(stderr, "%i:%s: ", __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
+#define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 
 struct appfs_thread_data {
 	Tcl_Interp *interp;
@@ -39,6 +40,7 @@ typedef enum {
 } appfs_cpuArch_t;
 
 typedef enum {
+	APPFS_PATHTYPE_INVALID,
 	APPFS_PATHTYPE_FILE,
 	APPFS_PATHTYPE_DIRECTORY,
 	APPFS_PATHTYPE_SYMLINK
@@ -192,6 +194,37 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	return(retval);
 }
 
+static int appfs_update_index(const char *hostname) {
+	int tcl_ret;
+
+	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 2, "::appfs::getindex", hostname);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(globalThread.interp));
+
+		return(-1);
+	}
+
+	return(0);
+}
+
+static int appfs_getfile(const char *hostname, const char *sha1) {
+	return(0);
+}
+
+static int appfs_update_manifest(const char *hostname, const char *sha1) {
+	int tcl_ret;
+
+	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 3, "::appfs::getpkgmanifest", hostname, sha1);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("Call to ::appfs::getpkgmanifest failed: %s", Tcl_GetStringResult(globalThread.interp));
+
+		return(-1);
+	}
+
+	return(0);
+}
+
+
 #define appfs_free_list_type(id, type) static void appfs_free_list_ ## id(type *head) { \
 	type *obj, *next; \
 	for (obj = head; obj; obj = next) { \
@@ -279,16 +312,14 @@ static int appfs_getindex_cb(void *_head, int columns, char **values, char **nam
 static struct appfs_package *appfs_getindex(const char *hostname, int *package_count_p) {
 	struct appfs_package *head = NULL;
 	char *sql;
-	int tcl_ret, sqlite_ret;
+	int index_ret, sqlite_ret;
 
 	if (package_count_p == NULL) {
 		return(NULL);
 	}
 
-	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 2, "::appfs::getindex", hostname);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(globalThread.interp));
-
+	index_ret = appfs_update_index(hostname);
+	if (index_ret != 0) {
 		return(NULL);
 	}
 
@@ -315,20 +346,223 @@ static struct appfs_package *appfs_getindex(const char *hostname, int *package_c
 	return(head);
 }
 
-static int appfs_getfile(const char *hostname, const char *sha1) {
+static int appfs_getchildren_cb(void *_head, int columns, char **values, char **names) {
+	struct appfs_children **head_p, *obj;
+
+	head_p = _head;
+
+	obj = (void *) ckalloc(sizeof(*obj));
+
+	snprintf(obj->name, sizeof(obj->name), "%s", values[0]);
+
+	if (*head_p == NULL) {
+		obj->counter = 0;
+	} else {
+		obj->counter = (*head_p)->counter + 1;
+	}
+
+	obj->_next = *head_p;
+	*head_p = obj;
+
+	return(0);
+	
+}
+
+static struct appfs_children *appfs_getchildren(const char *hostname, const char *package_hash, const char *path, int *children_count_p) {
+	struct appfs_children *head = NULL;
+	char *sql;
+	int index_ret, sqlite_ret, manifest_ret;
+
+	if (children_count_p == NULL) {
+		return(NULL);
+	}
+
+	index_ret = appfs_update_index(hostname);
+	if (index_ret != 0) {
+		return(NULL);
+	}
+
+	manifest_ret = appfs_update_manifest(hostname, package_hash);
+	if (manifest_ret != 0) {
+		return(NULL);
+	}
+
+	sql = sqlite3_mprintf("SELECT file_name FROM files WHERE package_sha1 = %Q AND file_directory = %Q;", package_hash, path);
+	if (sql == NULL) {
+		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
+
+		return(NULL);
+	}
+
+	APPFS_DEBUG("SQL: %s", sql);
+	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getchildren_cb, &head, NULL);
+	sqlite3_free(sql);
+
+	if (sqlite_ret != SQLITE_OK) {
+		APPFS_DEBUG("Call to sqlite3_exec failed.");
+
+		return(NULL);
+	}
+
+	if (head != NULL) {
+		*children_count_p = head->counter + 1;
+	}
+
+	return(head);
+}
+
+static int appfs_lookup_package_hash_cb(void *_retval, int columns, char **values, char **names) {
+	char **retval = _retval;
+
+	*retval = strdup(values[0]);
+
 	return(0);
 }
 
-static int appfs_getmanifest(const char *hostname, const char *sha1) {
+static char *appfs_lookup_package_hash(const char *hostname, const char *package, appfs_os_t os, appfs_cpuArch_t cpuArch, const char *version) {
+	char *sql;
+	char *retval = NULL;
+	int index_ret, sqlite_ret;
+
+	index_ret = appfs_update_index(hostname);
+	if (index_ret != 0) {
+		return(NULL);
+	}
+
+	sql = sqlite3_mprintf("SELECT sha1 FROM packages WHERE hostname = %Q AND package = %Q AND os = %Q AND cpuArch = %Q AND version = %Q;",
+		hostname,
+		package,
+		appfs_convert_os_toString(os),
+		appfs_convert_cpuArch_toString(cpuArch),
+		version
+	);
+	if (sql == NULL) {
+		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
+
+		return(NULL);
+	}
+
+	APPFS_DEBUG("SQL: %s", sql);
+	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_lookup_package_hash_cb, &retval, NULL);
+	sqlite3_free(sql);
+
+	if (sqlite_ret != SQLITE_OK) {
+		APPFS_DEBUG("Call to sqlite3_exec failed.");
+
+		return(NULL);
+	}
+
+	return(retval);
+}
+
+static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, char **names) {
+	struct appfs_pathinfo *pathinfo = _pathinfo;
+	const char *type, *time, *source, *size;
+
+	type = values[0];
+	time = values[1];
+	source = values[2];
+	size = values[3];
+
+	pathinfo->time = strtoull(time, NULL, 10);
+
+	if (strcmp(type, "file") == 0) {
+		pathinfo->type = APPFS_PATHTYPE_FILE;
+		pathinfo->typeinfo.file.executable = 0;
+		pathinfo->typeinfo.file.size = strtoull(size, NULL, 10);
+
+		return(0);
+	}
+
+	if (strcmp(type, "directory") == 0) {
+		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+		pathinfo->typeinfo.dir.childcount = 0;
+
+		return(0);
+	}
+
+	return(0);
+
+	/* Until this is used, prevent the compiler from complaining */
+	source = source;
+}
+
+static int appfs_getfileinfo(const char *hostname, const char *package_hash, const char *_path, struct appfs_pathinfo *pathinfo) {
+	char *directory, *file, *path;
+	char *sql;
+	int index_ret, sqlite_ret, manifest_ret;
+
+	if (pathinfo == NULL) {
+		return(-EIO);
+	}
+
+	index_ret = appfs_update_index(hostname);
+	if (index_ret != 0) {
+		return(-EIO);
+	}
+
+	manifest_ret = appfs_update_manifest(hostname, package_hash);
+	if (manifest_ret != 0) {
+		return(-EIO);
+	}
+
+	path = strdup(_path);
+	directory = path;
+	file = strrchr(path, '/');
+	if (file == NULL) {
+		file = path;
+		directory = "";
+	} else {
+		*file = '\0';
+		file++;
+	}
+
+	sql = sqlite3_mprintf("SELECT type, time, source, size FROM files WHERE package_sha1 = %Q AND file_directory = %Q AND file_name = %Q;", package_hash, directory, file);
+	if (sql == NULL) {
+		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
+
+		free(path);
+
+		return(-EIO);
+	}
+
+	free(path);
+
+	pathinfo->type = APPFS_PATHTYPE_INVALID;
+
+	APPFS_DEBUG("SQL: %s", sql);
+	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getfileinfo_cb, pathinfo, NULL);
+	sqlite3_free(sql);
+
+	if (sqlite_ret != SQLITE_OK) {
+		APPFS_DEBUG("Call to sqlite3_exec failed.");
+
+		return(-EIO);
+	}
+
+	if (pathinfo->type == APPFS_PATHTYPE_INVALID) {
+		return(-ENOENT);
+	}
+
 	return(0);
 }
 
 /* Get information about a path, and optionally list children */
 static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
 	struct appfs_site *sites, *site;
-	struct appfs_children *node;
-	int sites_count;
-	char *path, *hostname, *package;
+	struct appfs_children *node, *dir_children;
+	struct appfs_package *packages, *package;
+	appfs_os_t os_val;
+	appfs_cpuArch_t cpuArch_val;
+	char *hostname, *packagename, *os_cpuArch, *os, *cpuArch, *version;
+	char *path, *path_s;
+	char *package_hash;
+	int sites_count, packages_count, os_cpuArch_count, version_count, files_count;
+	int fileinfo_ret;
+
+	if (children) {
+		*children = NULL;
+	}
 
 	if (_path == NULL) {
 		return(-ENOENT);
@@ -340,12 +574,12 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 
 	if (_path[1] == '\0') {
 		/* Request for the root directory */
-		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
 		sites = appfs_getsites(&sites_count);
+
+		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
 		pathinfo->typeinfo.dir.childcount = sites_count;
 
 		if (children) {
-			*children = NULL;
 			for (site = sites; site; site = site->_next) {
 				node = (void *) ckalloc(sizeof(*node));
 				node->_next = *children;
@@ -360,16 +594,191 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	}
 
 	path = strdup(_path);
+	path_s = path;
 
 	hostname = path + 1;
-	package = strchr(hostname, '/');
+	packagename = strchr(hostname, '/');
 
-	if (package == NULL) {
-		/* Request for a single hostname */
-	} else {
-		*package = '\0';
-		package++;
+	if (packagename != NULL) {
+		*packagename = '\0';
+		packagename++;
 	}
+
+	packages = appfs_getindex(hostname, &packages_count);
+
+	if (packages == NULL || packages_count == 0) {
+		APPFS_DEBUG("Unable to fetch package index from %s", hostname);
+
+		free(path_s);
+
+		return(-ENOENT);
+	}
+
+	if (packagename == NULL) {
+		/* Request for a single hostname */
+		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+		pathinfo->typeinfo.dir.childcount = packages_count;
+
+		if (children) {
+			for (package = packages; package; package = package->_next) {
+				node = (void *) ckalloc(sizeof(*node));
+				node->_next = *children;
+				strcpy(node->name, package->name);
+				*children = node;
+			}
+		}
+
+		appfs_free_list_package(packages);
+
+		free(path_s);
+
+		return(0);
+	}
+
+	os_cpuArch = strchr(packagename, '/');
+	if (os_cpuArch == NULL) {
+		/* Request for OS and CPU Arch for a specific package */
+		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+
+		os_cpuArch_count = 0;
+		for (package = packages; package; package = package->_next) {
+			if (strcmp(package->name, packagename) != 0) {
+				APPFS_DEBUG("Skipping package named \"%s\", does not match requested package: \"%s\"", package->name, packagename);
+
+				continue;
+			}
+
+			os_cpuArch_count++;
+
+			if (children) {
+				node = (void *) ckalloc(sizeof(*node));
+				node->_next = *children;
+				snprintf(node->name, sizeof(node->name), "%s-%s", appfs_convert_os_toString(package->os), appfs_convert_cpuArch_toString(package->cpuArch));
+				*children = node;
+			}
+		}
+
+		appfs_free_list_package(packages);
+
+		free(path_s);
+
+		pathinfo->typeinfo.dir.childcount = os_cpuArch_count;
+
+		return(0);
+	}
+
+	*os_cpuArch = '\0';
+	os_cpuArch++;
+
+	version = strchr(os_cpuArch, '/');
+
+	if (version != NULL) {
+		*version = '\0';
+		version++;
+	}
+
+	os = os_cpuArch;
+	cpuArch = strchr(os_cpuArch, '-');
+	if (cpuArch) {
+		*cpuArch = '\0';
+		cpuArch++;
+
+		cpuArch_val = appfs_convert_cpuArch_fromString(cpuArch);
+	} else {
+		cpuArch_val = APPFS_CPU_UNKNOWN;
+	}
+
+	os_val = appfs_convert_os_fromString(os);
+
+	if (version == NULL) {
+		/* Request for version list for a package on an OS/CPU */
+		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+
+		version_count = 0;
+		for (package = packages; package; package = package->_next) {
+			if (strcmp(package->name, packagename) != 0) {
+				APPFS_DEBUG("Skipping package named \"%s\", does not match requested package: \"%s\"", package->name, packagename);
+
+				continue;
+			}
+
+			if (package->os != os_val) {
+				continue;
+			}
+
+			if (package->cpuArch != cpuArch_val) {
+				continue;
+			}
+
+			version_count++;
+
+			if (children) {
+				node = (void *) ckalloc(sizeof(*node));
+				node->_next = *children;
+				strcpy(node->name, package->version);
+				*children = node;
+			}
+		}
+
+		appfs_free_list_package(packages);
+
+		free(path_s);
+
+		pathinfo->typeinfo.dir.childcount = version_count;
+
+		return(0);
+	}
+
+	appfs_free_list_package(packages);
+
+	path = strchr(version, '/');
+	if (path == NULL) {
+		path = "";
+	} else {
+		*path = '\0';
+		path++;
+	}
+
+	/* Request for a file in a specific package */
+	APPFS_DEBUG("Requesting information for hostname = %s, package = %s, os = %s, cpuArch = %s, version = %s, path = %s", 
+		hostname, packagename, os, cpuArch, version, path
+	);
+
+	package_hash = appfs_lookup_package_hash(hostname, packagename, os_val, cpuArch_val, version);
+	if (package_hash == NULL) {
+		free(path_s);
+
+		return(-ENOENT);
+	}
+
+	APPFS_DEBUG("  ... which hash a hash of %s", package_hash);
+
+	if (strcmp(path, "") == 0) {
+		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+	} else {
+		fileinfo_ret = appfs_getfileinfo(hostname, package_hash, path, pathinfo);
+		if (fileinfo_ret != 0) {
+			free(path_s);
+
+			return(fileinfo_ret);
+		}
+	}
+
+	if (pathinfo->type == APPFS_PATHTYPE_DIRECTORY) {
+		dir_children = appfs_getchildren(hostname, package_hash, path, &files_count);
+
+		if (dir_children != NULL) {
+			pathinfo->typeinfo.dir.childcount = files_count;
+		}
+
+		if (children) {
+			*children = dir_children;
+		}
+	}
+
+	free(path_s);
+
+	return(0);
 }
 
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
@@ -442,7 +851,9 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 static int appfs_test_driver(void) {
 	struct appfs_site *sites, *site;
 	struct appfs_package *packages, *package;
-	int packages_count = 0, sites_count = 0;
+	struct appfs_children *files, *file;
+	char *sha1 = NULL;
+	int packages_count = 0, sites_count = 0, files_count;
 
 	sites = appfs_getsites(&sites_count);
 	printf("Sites:\n");
@@ -460,6 +871,8 @@ static int appfs_test_driver(void) {
 	}
 
 	for (package = packages; package; package = package->_next) {
+		sha1 = package->sha1;
+
 		printf("Package:\n\tname = %s\n\tversion = %s\n\tsha1 = %s\n\tos = %s\n\tcpuArch = %s\n",
 			package->name,
 			package->version,
@@ -469,6 +882,33 @@ static int appfs_test_driver(void) {
 		);
 	}
 
+	files = appfs_getchildren("rkeene.org", sha1, "", &files_count);
+	if (files == NULL) {
+		fprintf(stderr, "Unable to list files in the last package.\n");
+
+		return(1);
+	}
+
+	printf("Files:\n");
+	for (file = files; file; file = file->_next) {
+		printf("\t%s\n", file->name);
+	}
+
+	appfs_free_list_children(files);
+
+	files = appfs_getchildren("rkeene.org", sha1, "tcl", &files_count);
+	if (files == NULL) {
+		fprintf(stderr, "Unable to list files in the last package.\n");
+
+		return(1);
+	}
+
+	printf("Files:\n");
+	for (file = files; file; file = file->_next) {
+		printf("\ttcl/%s\n", file->name);
+	}
+
+	appfs_free_list_children(files);
 	appfs_free_list_package(packages);
 
 	return(0);
