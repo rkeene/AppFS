@@ -345,9 +345,11 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 		pathinfo->typeinfo.dir.childcount = sites_count;
 
 		if (children) {
+			*children = NULL;
 			for (site = sites; site; site = site->_next) {
 				node = (void *) ckalloc(sizeof(*node));
 				node->_next = *children;
+				strcpy(node->name, site->name);
 				*children = node;
 			}
 		}
@@ -405,10 +407,25 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 }
 
 static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
+	struct appfs_pathinfo pathinfo;
+	struct appfs_children *children, *child;
+	int res;
+
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	res = appfs_get_path_info(path, &pathinfo, &children);
+	if (res != 0) {
+		return(res);
+	}
 
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
+
+	for (child = children; child; child = child->_next) {
+		filler(buf, child->name, NULL, 0);
+	}
+
+	appfs_free_list_children(children);
 
 	return 0;
 }
