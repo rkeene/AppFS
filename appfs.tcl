@@ -28,8 +28,9 @@ namespace eval ::appfs {
 			set tmpfile "${file}.new"
 
 			set fd [open $tmpfile "w"]
+			fconfigure $fd -translation binary
 
-			set token [::http::geturl $url -channel $fd]
+			set token [::http::geturl $url -channel $fd -binary true]
 			set ncode [::http::ncode $token]
 			::http::reset $token
 			close $fd
