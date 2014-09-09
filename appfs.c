@@ -38,11 +38,17 @@ typedef enum {
 	APPFS_CPU_ARM
 } appfs_cpuArch_t;
 
+typedef enum {
+	APPFS_PATHTYPE_FILE,
+	APPFS_PATHTYPE_DIRECTORY,
+	APPFS_PATHTYPE_SYMLINK
+} appfs_pathtype_t;
+
 struct appfs_package {
 	struct appfs_package *_next;
 	int counter;
 
-	char name[128];
+	char name[256];
 	char version[64];
 	char sha1[41];
 	appfs_os_t os;
@@ -55,6 +61,27 @@ struct appfs_site {
 	int counter;
 
 	char name[256];
+};
+
+struct appfs_children {
+	struct appfs_children *_next;
+	int counter;
+
+	char name[256];
+};
+
+struct appfs_pathinfo {
+	appfs_pathtype_t type;
+	time_t time;
+	union {
+		struct {
+			int childcount;
+		} dir;
+		struct {
+			int executable;
+			off_t size;
+		} file;
+	} typeinfo;
 };
 
 static appfs_os_t appfs_convert_os_fromString(const char *os) {
@@ -144,15 +171,21 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 
 	objv = (void *) ckalloc(sizeof(*objv) * objc);
 	objv[0] = Tcl_NewStringObj(cmd, -1);
+	Tcl_IncrRefCount(objv[0]);
 
 	va_start(argp, cmd);
 	for (i = 1; i < objc; i++) {
 		arg = va_arg(argp, const char *);
 		objv[i] = Tcl_NewStringObj(arg, -1);
+		Tcl_IncrRefCount(objv[i]);
 	}
 	va_end(argp);
 
 	retval = Tcl_EvalObjv(interp, objc, objv, 0);
+
+	for (i = 0; i < objc; i++) {
+		Tcl_DecrRefCount(objv[i]);
+	}
 
 	ckfree((void *) objv);
 
@@ -169,7 +202,7 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 
 appfs_free_list_type(site, struct appfs_site)
 appfs_free_list_type(package, struct appfs_package)
-
+appfs_free_list_type(children, struct appfs_children)
 
 static int appfs_getsites_cb(void *_head, int columns, char **values, char **names) {
 	struct appfs_site **head_p, *obj;
@@ -290,9 +323,12 @@ static int appfs_getmanifest(const char *hostname, const char *sha1) {
 	return(0);
 }
 
-#if 0
-static int appfs_parse_path(const char *_path, struct appfs_path *pathinfo) {
-	char *path;
+/* Get information about a path, and optionally list children */
+static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
+	struct appfs_site *sites, *site;
+	struct appfs_children *node;
+	int sites_count;
+	char *path, *hostname, *package;
 
 	if (_path == NULL) {
 		return(-ENOENT);
@@ -304,6 +340,21 @@ static int appfs_parse_path(const char *_path, struct appfs_path *pathinfo) {
 
 	if (_path[1] == '\0') {
 		/* Request for the root directory */
+		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+		sites = appfs_getsites(&sites_count);
+		pathinfo->typeinfo.dir.childcount = sites_count;
+
+		if (children) {
+			for (site = sites; site; site = site->_next) {
+				node = (void *) ckalloc(sizeof(*node));
+				node->_next = *children;
+				*children = node;
+			}
+		}
+
+		appfs_free_list_site(sites);
+
+		return(0);
 	}
 
 	path = strdup(_path);
@@ -313,27 +364,42 @@ static int appfs_parse_path(const char *_path, struct appfs_path *pathinfo) {
 
 	if (package == NULL) {
 		/* Request for a single hostname */
+	} else {
+		*package = '\0';
+		package++;
 	}
-
-
 }
-#else
-static int appfs_parse_path(const char *_path) {
-	return(0);
-}
-#endif
 
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
+	struct appfs_pathinfo pathinfo;
 	int res = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	res = appfs_parse_path(path);
+	res = appfs_get_path_info(path, &pathinfo, NULL);
+	if (res != 0) {
+		return(res);
+	}
 
 	memset(stbuf, 0, sizeof(struct stat));
 
-	stbuf->st_mode = S_IFDIR | 0755;
-	stbuf->st_nlink = 2;
+	stbuf->st_mtime = pathinfo.time;
+	stbuf->st_ctime = pathinfo.time;
+	stbuf->st_atime = pathinfo.time;
+
+	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {
+		stbuf->st_mode = S_IFDIR | 0755;
+		stbuf->st_nlink = 2 + pathinfo.typeinfo.dir.childcount;
+	} else {
+		if (pathinfo.typeinfo.file.executable) {
+			stbuf->st_mode = S_IFREG | 0755;
+		} else {
+			stbuf->st_mode = S_IFREG | 0644;
+		}
+
+		stbuf->st_nlink = 1;
+		stbuf->st_size = pathinfo.typeinfo.file.size;
+	}
 
 	return res;
 }
