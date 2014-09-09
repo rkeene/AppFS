@@ -22,6 +22,7 @@ static pthread_key_t interpKey;
 struct appfs_thread_data {
 	sqlite3 *db;
 	const char *cachedir;
+	time_t boottime;
 };
 
 struct appfs_thread_data globalThread;
@@ -678,6 +679,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
 		pathinfo->typeinfo.dir.childcount = sites_count;
 		pathinfo->hostname[0] = '\0';
+		pathinfo->time = globalThread.boottime;
 
 		if (children) {
 			for (site = sites; site; site = site->_next) {
@@ -720,6 +722,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 		/* Request for a single hostname */
 		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
 		pathinfo->typeinfo.dir.childcount = packages_count;
+		pathinfo->time = globalThread.boottime;
 
 		if (children) {
 			for (package = packages; package; package = package->_next) {
@@ -741,6 +744,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	if (os_cpuArch == NULL) {
 		/* Request for OS and CPU Arch for a specific package */
 		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+		pathinfo->time = globalThread.boottime;
 
 		os_cpuArch_count = 0;
 		for (package = packages; package; package = package->_next) {
@@ -795,6 +799,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	if (version == NULL) {
 		/* Request for version list for a package on an OS/CPU */
 		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+		pathinfo->time = globalThread.boottime;
 
 		version_count = 0;
 		for (package = packages; package; package = package->_next) {
@@ -857,6 +862,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 
 	if (strcmp(path, "") == 0) {
 		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+		pathinfo->time = globalThread.boottime;
 	} else {
 		fileinfo_ret = appfs_getfileinfo(hostname, package_hash, path, pathinfo);
 		if (fileinfo_ret != 0) {
@@ -1075,6 +1081,7 @@ int main(int argc, char **argv) {
 	int pthread_ret, snprintf_ret, sqlite_ret;
 
 	globalThread.cachedir = cachedir;
+	globalThread.boottime = time(NULL);
 
 	pthread_ret = pthread_key_create(&interpKey, NULL);
 	if (pthread_ret != 0) {
