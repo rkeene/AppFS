@@ -1,9 +1,11 @@
 #define FUSE_USE_VERSION 26
 
+#include <sys/types.h>
 #include <sqlite3.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -75,6 +77,7 @@ struct appfs_children {
 struct appfs_pathinfo {
 	appfs_pathtype_t type;
 	time_t time;
+	char hostname[256];
 	union {
 		struct {
 			int childcount;
@@ -82,6 +85,7 @@ struct appfs_pathinfo {
 		struct {
 			int executable;
 			off_t size;
+			char sha1[41];
 		} file;
 	} typeinfo;
 };
@@ -207,8 +211,20 @@ static int appfs_update_index(const char *hostname) {
 	return(0);
 }
 
-static int appfs_getfile(const char *hostname, const char *sha1) {
-	return(0);
+static const char *appfs_getfile(const char *hostname, const char *sha1) {
+	char *retval;
+	int tcl_ret;
+
+	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 3, "::appfs::download", hostname, sha1);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("Call to ::appfs::download failed: %s", Tcl_GetStringResult(globalThread.interp));
+
+		return(NULL);
+	}
+
+	retval = strdup(Tcl_GetStringResult(globalThread.interp));
+
+	return(retval);
 }
 
 static int appfs_update_manifest(const char *hostname, const char *sha1) {
@@ -479,7 +495,12 @@ static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, cha
 			perms = "";
 		}
 
+		if (!sha1) {
+			sha1 = "";
+		}
+
 		pathinfo->typeinfo.file.size = strtoull(size, NULL, 10);
+		snprintf(pathinfo->typeinfo.file.sha1, sizeof(pathinfo->typeinfo.file.sha1), "%s", sha1);
 
 		if (strcmp(perms, "x") == 0) {
 			pathinfo->typeinfo.file.executable = 1;
@@ -594,6 +615,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 
 		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
 		pathinfo->typeinfo.dir.childcount = sites_count;
+		pathinfo->hostname[0] = '\0';
 
 		if (children) {
 			for (site = sites; site; site = site->_next) {
@@ -619,6 +641,8 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 		*packagename = '\0';
 		packagename++;
 	}
+
+	snprintf(pathinfo->hostname, sizeof(pathinfo->hostname), "%s", hostname);
 
 	packages = appfs_getindex(hostname, &packages_count);
 
@@ -815,13 +839,13 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_atime = pathinfo.time;
 
 	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {
-		stbuf->st_mode = S_IFDIR | 0755;
+		stbuf->st_mode = S_IFDIR | 0555;
 		stbuf->st_nlink = 2 + pathinfo.typeinfo.dir.childcount;
 	} else {
 		if (pathinfo.typeinfo.file.executable) {
-			stbuf->st_mode = S_IFREG | 0755;
+			stbuf->st_mode = S_IFREG | 0555;
 		} else {
-			stbuf->st_mode = S_IFREG | 0644;
+			stbuf->st_mode = S_IFREG | 0444;
 		}
 
 		stbuf->st_nlink = 1;
@@ -834,13 +858,13 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
 	struct appfs_pathinfo pathinfo;
 	struct appfs_children *children, *child;
-	int res;
+	int retval;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	res = appfs_get_path_info(path, &pathinfo, &children);
-	if (res != 0) {
-		return(res);
+	retval = appfs_get_path_info(path, &pathinfo, &children);
+	if (retval != 0) {
+		return(retval);
 	}
 
 	filler(buf, ".", NULL, 0);
@@ -852,15 +876,60 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 
 	appfs_free_list_children(children);
 
-	return 0;
+	return(0);
 }
 
 static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
-	return(-ENOENT);
+	struct appfs_pathinfo pathinfo;
+	const char *real_path;
+	int fh;
+	int gpi_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	if ((fi->flags & 3) != O_RDONLY) {
+                return(-EACCES);
+	}
+
+	gpi_ret = appfs_get_path_info(path, &pathinfo, NULL);
+	if (gpi_ret != 0) {
+		return(gpi_ret);
+	}
+
+	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {
+		return(-EISDIR);
+	}
+
+	real_path = appfs_getfile(pathinfo.hostname, pathinfo.typeinfo.file.sha1);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	fh = open(real_path, O_RDONLY);
+	free((void *) real_path);
+	if (fh < 0) {
+		return(-EIO);
+	}
+
+	fi->fh = fh;
+
+	return(0);
 }
 
 static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-	return(-ENOENT);
+	off_t lseek_ret;
+	ssize_t read_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	lseek_ret = lseek(fi->fh, offset, SEEK_SET);
+	if (lseek_ret != offset) {
+		return(-EIO);
+	}
+
+	read_ret = read(fi->fh, buf, size);
+
+	return(read_ret);
 }
 
 #ifdef APPFS_TEST_DRIVER
