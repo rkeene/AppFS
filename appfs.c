@@ -58,6 +58,8 @@ struct appfs_package {
 	char name[256];
 	char version[64];
 	char sha1[41];
+	char os_str[64];
+	char cpuArch_str[64];
 	appfs_os_t os;
 	appfs_cpuArch_t cpuArch;
 	int isLatest;
@@ -385,6 +387,8 @@ static int appfs_getindex_cb(void *_head, int columns, char **values, char **nam
 	snprintf(obj->sha1, sizeof(obj->sha1), "%s", values[2]);
 	obj->os = appfs_convert_os_fromString(values[3]);
 	obj->cpuArch = appfs_convert_cpuArch_fromString(values[4]);
+	snprintf(obj->os_str, sizeof(obj->os_str), "%s", values[3]);
+	snprintf(obj->cpuArch_str, sizeof(obj->cpuArch_str), "%s", values[4]);
 	if (values[5][0] == '1') {
 		obj->isLatest = 1;
 	} else {
@@ -503,7 +507,7 @@ static int appfs_lookup_package_hash_cb(void *_retval, int columns, char **value
 	return(0);
 }
 
-static char *appfs_lookup_package_hash(const char *hostname, const char *package, appfs_os_t os, appfs_cpuArch_t cpuArch, const char *version) {
+static char *appfs_lookup_package_hash(const char *hostname, const char *package, const char *os, const char *cpuArch, const char *version) {
 	char *sql;
 	char *retval = NULL;
 	int sqlite_ret;
@@ -513,8 +517,8 @@ static char *appfs_lookup_package_hash(const char *hostname, const char *package
 	sql = sqlite3_mprintf("SELECT sha1 FROM packages WHERE hostname = %Q AND package = %Q AND os = %Q AND cpuArch = %Q AND version = %Q;",
 		hostname,
 		package,
-		appfs_convert_os_toString(os),
-		appfs_convert_cpuArch_toString(cpuArch),
+		os,
+		cpuArch,
 		version
 	);
 	if (sql == NULL) {
@@ -751,7 +755,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 			if (children) {
 				node = (void *) ckalloc(sizeof(*node));
 				node->_next = *children;
-				snprintf(node->name, sizeof(node->name), "%s-%s", appfs_convert_os_toString(package->os), appfs_convert_cpuArch_toString(package->cpuArch));
+				snprintf(node->name, sizeof(node->name), "%s-%s", package->os_str, package->cpuArch_str);
 				*children = node;
 			}
 		}
@@ -842,7 +846,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 		hostname, packagename, os, cpuArch, version, path
 	);
 
-	package_hash = appfs_lookup_package_hash(hostname, packagename, os_val, cpuArch_val, version);
+	package_hash = appfs_lookup_package_hash(hostname, packagename, os, cpuArch, version);
 	if (package_hash == NULL) {
 		free(path_s);
 
