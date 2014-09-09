@@ -80,7 +80,7 @@ function emit_manifest() {
 		stat_data="$(stat --format="${stat_format}" "${filename}")"
 
 		if [ -z "${extra_data}" ]; then
-			echo "${type},${stat_data},${extra_data},${filename}"
+			echo "${type},${stat_data},${filename}"
 		else
 			echo "${type},${stat_data},${extra_data},${filename}"
 		fi
