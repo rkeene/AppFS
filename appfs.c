@@ -2,6 +2,7 @@
 
 #include <sys/types.h>
 #include <sqlite3.h>
+#include <pthread.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -16,9 +17,11 @@
 
 #define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 
+static pthread_key_t interpKey;
+
 struct appfs_thread_data {
-	Tcl_Interp *interp;
 	sqlite3 *db;
+	const char *cachedir;
 };
 
 struct appfs_thread_data globalThread;
@@ -168,6 +171,51 @@ static const char *appfs_convert_cpuArch_toString(appfs_cpuArch_t cpu) {
 	return("unknown");
 }
 
+static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
+	Tcl_Interp *interp;
+	int tcl_ret;
+
+	interp = Tcl_CreateInterp();
+	if (interp == NULL) {
+		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
+
+		return(NULL);
+	}
+
+	tcl_ret = Tcl_Init(interp);
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
+
+		return(NULL);
+	}
+
+	tcl_ret = Tcl_Eval(interp, ""
+#include "appfs.tcl.h"
+	"");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		return(NULL);
+	}
+
+	if (Tcl_SetVar(interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
+		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
+
+		return(NULL);
+	}
+
+	tcl_ret = Tcl_Eval(interp, "::appfs::init");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		return(NULL);
+	}
+
+	return(interp);
+}
+
 static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	Tcl_Obj **objv;
 	const char *arg;
@@ -195,49 +243,79 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 
 	ckfree((void *) objv);
 
+	if (retval != TCL_OK) {
+		APPFS_DEBUG("Tcl command failed, ::errorInfo contains: %s\n", Tcl_GetVar(interp, "::errorInfo", 0));
+	}
+
 	return(retval);
 }
 
-static int appfs_update_index(const char *hostname) {
+static void appfs_update_index(const char *hostname) {
+	Tcl_Interp *interp;
 	int tcl_ret;
 
-	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 2, "::appfs::getindex", hostname);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(globalThread.interp));
+	APPFS_DEBUG("Enter: hostname = %s", hostname);
 
-		return(-1);
+	interp = pthread_getspecific(interpKey);
+	if (interp == NULL) {
+		interp = appfs_create_TclInterp(globalThread.cachedir);
+
+		pthread_setspecific(interpKey, interp);
 	}
 
-	return(0);
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getindex", hostname);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(interp));
+
+		return;
+	}
+
+	return;
 }
 
 static const char *appfs_getfile(const char *hostname, const char *sha1) {
+	Tcl_Interp *interp;
 	char *retval;
 	int tcl_ret;
 
-	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 3, "::appfs::download", hostname, sha1);
+	interp = pthread_getspecific(interpKey);
+	if (interp == NULL) {
+		interp = appfs_create_TclInterp(globalThread.cachedir);
+
+		pthread_setspecific(interpKey, interp);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::download", hostname, sha1);
 	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::download failed: %s", Tcl_GetStringResult(globalThread.interp));
+		APPFS_DEBUG("Call to ::appfs::download failed: %s", Tcl_GetStringResult(interp));
 
 		return(NULL);
 	}
 
-	retval = strdup(Tcl_GetStringResult(globalThread.interp));
+	retval = strdup(Tcl_GetStringResult(interp));
 
 	return(retval);
 }
 
-static int appfs_update_manifest(const char *hostname, const char *sha1) {
+static void appfs_update_manifest(const char *hostname, const char *sha1) {
+	Tcl_Interp *interp;
 	int tcl_ret;
 
-	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 3, "::appfs::getpkgmanifest", hostname, sha1);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getpkgmanifest failed: %s", Tcl_GetStringResult(globalThread.interp));
+	interp = pthread_getspecific(interpKey);
+	if (interp == NULL) {
+		interp = appfs_create_TclInterp(globalThread.cachedir);
 
-		return(-1);
+		pthread_setspecific(interpKey, interp);
 	}
 
-	return(0);
+	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::getpkgmanifest", hostname, sha1);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("Call to ::appfs::getpkgmanifest failed: %s", Tcl_GetStringResult(interp));
+
+		return;
+	}
+
+	return;
 }
 
 
@@ -328,16 +406,13 @@ static int appfs_getindex_cb(void *_head, int columns, char **values, char **nam
 static struct appfs_package *appfs_getindex(const char *hostname, int *package_count_p) {
 	struct appfs_package *head = NULL;
 	char *sql;
-	int index_ret, sqlite_ret;
+	int sqlite_ret;
 
 	if (package_count_p == NULL) {
 		return(NULL);
 	}
 
-	index_ret = appfs_update_index(hostname);
-	if (index_ret != 0) {
-		return(NULL);
-	}
+	appfs_update_index(hostname);
 
 	sql = sqlite3_mprintf("SELECT package, version, sha1, os, cpuArch, isLatest FROM packages WHERE hostname = %Q;", hostname);
 	if (sql == NULL) {
@@ -387,21 +462,14 @@ static int appfs_getchildren_cb(void *_head, int columns, char **values, char **
 static struct appfs_children *appfs_getchildren(const char *hostname, const char *package_hash, const char *path, int *children_count_p) {
 	struct appfs_children *head = NULL;
 	char *sql;
-	int index_ret, sqlite_ret, manifest_ret;
+	int sqlite_ret;
 
 	if (children_count_p == NULL) {
 		return(NULL);
 	}
 
-	index_ret = appfs_update_index(hostname);
-	if (index_ret != 0) {
-		return(NULL);
-	}
-
-	manifest_ret = appfs_update_manifest(hostname, package_hash);
-	if (manifest_ret != 0) {
-		return(NULL);
-	}
+	appfs_update_index(hostname);
+	appfs_update_manifest(hostname, package_hash);
 
 	sql = sqlite3_mprintf("SELECT file_name FROM files WHERE package_sha1 = %Q AND file_directory = %Q;", package_hash, path);
 	if (sql == NULL) {
@@ -438,12 +506,9 @@ static int appfs_lookup_package_hash_cb(void *_retval, int columns, char **value
 static char *appfs_lookup_package_hash(const char *hostname, const char *package, appfs_os_t os, appfs_cpuArch_t cpuArch, const char *version) {
 	char *sql;
 	char *retval = NULL;
-	int index_ret, sqlite_ret;
+	int sqlite_ret;
 
-	index_ret = appfs_update_index(hostname);
-	if (index_ret != 0) {
-		return(NULL);
-	}
+	appfs_update_index(hostname);
 
 	sql = sqlite3_mprintf("SELECT sha1 FROM packages WHERE hostname = %Q AND package = %Q AND os = %Q AND cpuArch = %Q AND version = %Q;",
 		hostname,
@@ -527,21 +592,14 @@ static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, cha
 static int appfs_getfileinfo(const char *hostname, const char *package_hash, const char *_path, struct appfs_pathinfo *pathinfo) {
 	char *directory, *file, *path;
 	char *sql;
-	int index_ret, sqlite_ret, manifest_ret;
+	int sqlite_ret;
 
 	if (pathinfo == NULL) {
 		return(-EIO);
 	}
 
-	index_ret = appfs_update_index(hostname);
-	if (index_ret != 0) {
-		return(-EIO);
-	}
-
-	manifest_ret = appfs_update_manifest(hostname, package_hash);
-	if (manifest_ret != 0) {
-		return(-EIO);
-	}
+	appfs_update_index(hostname);
+	appfs_update_manifest(hostname, package_hash);
 
 	path = strdup(_path);
 	directory = path;
@@ -1010,42 +1068,13 @@ static struct fuse_operations appfs_oper = {
 int main(int argc, char **argv) {
 	const char *cachedir = APPFS_CACHEDIR;
 	char dbfilename[1024];
-	int tcl_ret, snprintf_ret, sqlite_ret;
+	int pthread_ret, snprintf_ret, sqlite_ret;
 
-	globalThread.interp = Tcl_CreateInterp();
-	if (globalThread.interp == NULL) {
-		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
+	globalThread.cachedir = cachedir;
 
-		return(1);
-	}
-
-	tcl_ret = Tcl_Init(globalThread.interp);
-	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
-
-		return(1);
-	}
-
-	tcl_ret = Tcl_Eval(globalThread.interp, ""
-#include "appfs.tcl.h"
-	"");
-	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(globalThread.interp));
-
-		return(1);
-	}
-
-	if (Tcl_SetVar(globalThread.interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
-		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
-
-		return(1);
-	}
-
-	tcl_ret = appfs_Tcl_Eval(globalThread.interp, 1, "::appfs::init");
-	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(globalThread.interp));
+	pthread_ret = pthread_key_create(&interpKey, NULL);
+	if (pthread_ret != 0) {
+		fprintf(stderr, "Unable to create TSD key for Tcl.  Aborting.\n");
 
 		return(1);
 	}
