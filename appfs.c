@@ -96,6 +96,12 @@ struct appfs_pathinfo {
 	} typeinfo;
 };
 
+struct appfs_sqlite3_query_cb_handle {
+	struct appfs_children *head;
+	int argc;
+	const char *fmt;
+};
+
 static appfs_os_t appfs_convert_os_fromString(const char *os) {
 	if (strcasecmp(os, "Linux") == 0) {
 		return(APPFS_OS_LINUX);
@@ -389,12 +395,6 @@ static struct appfs_children *appfs_getchildren(const char *hostname, const char
 
 	return(head);
 }
-
-struct appfs_sqlite3_query_cb_handle {
-	struct appfs_children *head;
-	int argc;
-	const char *fmt;
-};
 
 static int appfs_sqlite3_query_cb(void *_cb_handle, int columns, char **values, char **names) {
 	struct appfs_sqlite3_query_cb_handle *cb_handle;
