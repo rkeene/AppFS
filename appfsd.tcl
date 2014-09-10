@@ -31,9 +31,17 @@ namespace eval ::appfs {
 			set fd [open $tmpfile "w"]
 			fconfigure $fd -translation binary
 
-			set token [::http::geturl $url -channel $fd -binary true]
-			set ncode [::http::ncode $token]
-			::http::reset $token
+			catch {
+				set token [::http::geturl $url -channel $fd -binary true]
+			}
+
+			if {[info exists token]} {
+				set ncode [::http::ncode $token]
+				::http::reset $token
+			} else {
+				set ncode "900"
+			}
+
 			close $fd
 
 			if {$keyIsHash} {
