@@ -26,7 +26,7 @@ appfsd.o: appfsd.c appfsd.tcl.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o appfsd.o -c appfsd.c
 
 appfsd.tcl.h: appfsd.tcl stringify.tcl
-	./stringify.tcl appfsd.tcl > appfsd.tcl.h.new
+	sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' appfsd.tcl > appfsd.tcl.h.new
 	mv appfsd.tcl.h.new appfsd.tcl.h
 
 install: appfsd
