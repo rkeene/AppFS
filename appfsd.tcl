@@ -16,11 +16,12 @@ namespace eval ::appfs {
 	}
 
 	proc _cachefile {url key {keyIsHash 1}} {
+		set filekey $key
 		if {$keyIsHash} {
-			set key [_hash_sep $key]
+			set filekey [_hash_sep $filekey]
 		}
 
-		set file [file join $::appfs::cachedir $key]
+		set file [file join $::appfs::cachedir $filekey]
 
 		file mkdir [file dirname $file]
 
@@ -35,7 +36,16 @@ namespace eval ::appfs {
 			::http::reset $token
 			close $fd
 
-			if {$ncode == "200"} {
+			if {$keyIsHash} {
+				catch {
+					set hash [string tolower [exec openssl sha1 $tmpfile]]
+					regsub {.*= *} $hash {} hash
+				}
+			} else {
+				set hash $key
+			}
+
+			if {$ncode == "200" && $hash == $key} {
 				file rename -force -- $tmpfile $file
 			} else {
 				file delete -force -- $tmpfile
