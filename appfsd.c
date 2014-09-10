@@ -783,6 +783,17 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 	return(0);
 }
 
+static int appfs_fuse_close(const char *path, struct fuse_file_info *fi) {
+	int close_ret;
+
+	close_ret = close(fi->fh);
+	if (close_ret != 0) {
+		return(-EIO);
+	}
+
+	return(0);
+}
+
 static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
 	off_t lseek_ret;
 	ssize_t read_ret;
@@ -800,10 +811,11 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 }
 
 static struct fuse_operations appfs_oper = {
-	.getattr	= appfs_fuse_getattr,
-	.readdir	= appfs_fuse_readdir,
-	.open		= appfs_fuse_open,
-	.read		= appfs_fuse_read
+	.getattr   = appfs_fuse_getattr,
+	.readdir   = appfs_fuse_readdir,
+	.open      = appfs_fuse_open,
+	.release   = appfs_fuse_close,
+	.read      = appfs_fuse_read
 };
 
 int main(int argc, char **argv) {
