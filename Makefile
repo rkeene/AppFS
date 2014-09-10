@@ -6,6 +6,7 @@ LIBS = $(shell $(PKG_CONFIG) --libs fuse) $(shell $(PKG_CONFIG) --libs sqlite3) 
 PREFIX = /usr/local
 prefix = $(PREFIX)
 bindir = $(prefix)/bin
+sbindir = $(prefix)/sbin
 
 ifneq ($(TCLKIT_SDK_DIR),)
 TCLCONFIG_SH_PATH = $(TCLKIT_SDK_DIR)/lib/tclConfig.sh
@@ -30,7 +31,8 @@ appfsd.tcl.h: appfsd.tcl
 	mv appfsd.tcl.h.new appfsd.tcl.h
 
 install: appfsd
-	cp appfsd $(bindir)
+	if [ ! -d '$(DESTDIR)$(sbindir)' ]; then mkdir -p '$(DESTDIR)$(sbindir)'; chmod 755 '$(DESTDIR)$(sbindir)'; fi
+	cp appfsd '$(DESTDIR)$(sbindir)/'
 
 clean:
 	rm -f appfsd appfsd.o
