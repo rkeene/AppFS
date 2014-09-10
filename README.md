@@ -2,6 +2,12 @@ AppFS
 =====
 It's sort of like LazyFS.
 
+Usage
+-----
+Run:
+	1. # mkdir /tmp/appfs-cache /opt/appfs
+	2. # appfsd /opt/appfs
+
 
 Paths
 -----
