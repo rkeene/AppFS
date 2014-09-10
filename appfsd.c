@@ -28,50 +28,11 @@ struct appfs_thread_data {
 struct appfs_thread_data globalThread;
 
 typedef enum {
-	APPFS_OS_UNKNOWN,
-	APPFS_OS_ALL,
-	APPFS_OS_LINUX,
-	APPFS_OS_MACOSX,
-	APPFS_OS_FREEBSD,
-	APPFS_OS_OPENBSD,
-	APPFS_OS_SOLARIS
-} appfs_os_t;
-
-typedef enum {
-	APPFS_CPU_UNKNOWN,
-	APPFS_CPU_ALL,
-	APPFS_CPU_AMD64,
-	APPFS_CPU_I386,
-	APPFS_CPU_ARM
-} appfs_cpuArch_t;
-
-typedef enum {
 	APPFS_PATHTYPE_INVALID,
 	APPFS_PATHTYPE_FILE,
 	APPFS_PATHTYPE_DIRECTORY,
 	APPFS_PATHTYPE_SYMLINK
 } appfs_pathtype_t;
-
-struct appfs_package {
-	struct appfs_package *_next;
-	int counter;
-
-	char name[256];
-	char version[64];
-	char sha1[41];
-	char os_str[64];
-	char cpuArch_str[64];
-	appfs_os_t os;
-	appfs_cpuArch_t cpuArch;
-	int isLatest;
-};
-
-struct appfs_site {
-	struct appfs_site *_next;
-	int counter;
-
-	char name[256];
-};
 
 struct appfs_children {
 	struct appfs_children *_next;
@@ -101,84 +62,6 @@ struct appfs_sqlite3_query_cb_handle {
 	int argc;
 	const char *fmt;
 };
-
-static appfs_os_t appfs_convert_os_fromString(const char *os) {
-	if (strcasecmp(os, "Linux") == 0) {
-		return(APPFS_OS_LINUX);
-	}
-
-	if (strcasecmp(os, "Darwin") == 0 || strcasecmp(os, "Mac OS") == 0 || strcasecmp(os, "Mac OS X") == 0) {
-		return(APPFS_OS_MACOSX);
-	}
-
-	if (strcasecmp(os, "noarch") == 0) {
-		return(APPFS_OS_ALL);
-	}
-
-	return(APPFS_OS_UNKNOWN);
-}
-
-static const char *appfs_convert_os_toString(appfs_os_t os) {
-	switch (os) {
-		case APPFS_OS_ALL:
-			return("noarch");
-		case APPFS_OS_LINUX:
-			return("linux");
-		case APPFS_OS_MACOSX:
-			return("macosx");
-		case APPFS_OS_FREEBSD:
-			return("freebsd");
-		case APPFS_OS_OPENBSD:
-			return("openbsd");
-		case APPFS_OS_SOLARIS:
-			return("freebsd");
-		case APPFS_CPU_UNKNOWN:
-			return("unknown");
-	}
-
-	return("unknown");
-}
-
-static appfs_cpuArch_t appfs_convert_cpuArch_fromString(const char *cpu) {
-	if (strcasecmp(cpu, "amd64") == 0 || strcasecmp(cpu, "x86_64") == 0) {
-		return(APPFS_CPU_AMD64);
-	}
-
-	if (strcasecmp(cpu, "i386") == 0 || \
-	    strcasecmp(cpu, "i486") == 0 || \
-	    strcasecmp(cpu, "i586") == 0 || \
-	    strcasecmp(cpu, "i686") == 0 || \
-	    strcasecmp(cpu, "ix86") == 0) {
-		return(APPFS_CPU_I386);
-	}
-
-	if (strcasecmp(cpu, "arm") == 0) {
-		return(APPFS_CPU_ARM);
-	}
-
-	if (strcasecmp(cpu, "noarch") == 0) {
-		return(APPFS_CPU_ALL);
-	}
-
-	return(APPFS_CPU_UNKNOWN);
-}
-
-static const char *appfs_convert_cpuArch_toString(appfs_cpuArch_t cpu) {
-	switch (cpu) {
-		case APPFS_CPU_ALL:
-			return("noarch");
-		case APPFS_CPU_AMD64:
-			return("amd64");
-		case APPFS_CPU_I386:
-			return("ix86");
-		case APPFS_CPU_ARM:
-			return("arm");
-		case APPFS_CPU_UNKNOWN:
-			return("unknown");
-	}
-
-	return("unknown");
-}
 
 static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	Tcl_Interp *interp;
@@ -648,8 +531,6 @@ static int appfs_get_path_info_sql(char *sql, int argc, const char *fmt, struct 
 /* Get information about a path, and optionally list children */
 static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
 	struct appfs_children *dir_children;
-	appfs_os_t os_val;
-	appfs_cpuArch_t cpuArch_val;
 	char *hostname, *packagename, *os_cpuArch, *os, *cpuArch, *version;
 	char *path, *path_s;
 	char *package_hash;
@@ -741,13 +622,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	if (cpuArch) {
 		*cpuArch = '\0';
 		cpuArch++;
-
-		cpuArch_val = appfs_convert_cpuArch_fromString(cpuArch);
-	} else {
-		cpuArch_val = APPFS_CPU_UNKNOWN;
 	}
-
-	os_val = appfs_convert_os_fromString(os);
 
 	if (version == NULL) {
 		/* Request for version list for a package on an OS/CPU */
