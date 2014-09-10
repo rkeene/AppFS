@@ -1,5 +1,3 @@
-appfs
-appfs.o
-appfs-test
-appfs-test.o
-appfs.tcl.h
+appfsd
+appfsd.o
+appfsd.tcl.h
