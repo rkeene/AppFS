@@ -5,6 +5,7 @@ package require sqlite3
 
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
+	variable ttl 3600
 
 	proc _hash_sep {hash {seps 4}} {
 		for {set idx 0} {$idx < $seps} {incr idx} {
@@ -80,6 +81,7 @@ namespace eval ::appfs {
 			sqlite3 ::appfs::db [file join $::appfs::cachedir cache.db]
 		}
 
+		_db eval {CREATE TABLE IF NOT EXISTS sites(hostname PRIMARY KEY, lastUpdate);}
 		_db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest);}
 		_db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory);}
 	}
@@ -96,22 +98,39 @@ namespace eval ::appfs {
 	}
 
 	proc getindex {hostname} {
+		set now [clock seconds]
+
+		set lastUpdates [_db eval {SELECT lastUpdate FROM sites WHERE hostname = $hostname LIMIT 1;}]
+		if {[llength $lastUpdates] == 0} {
+			set lastUpdate 0
+		} else {
+			set lastUpdate [lindex $lastUpdates 0]
+		}
+
+		if {$now < ($lastUpdate + $::appfs::ttl)} {
+			return COMPLETE
+		}
+
 		if {[string match "*\[/~\]*" $hostname]} {
 			return -code error "Invalid hostname"
 		}
 
 		set url "http://$hostname/appfs/index"
 
-		set indexcachefile [_cachefile $url "SERVERS/[string tolower $hostname]" 0]
+		catch {
+			set token [::http::geturl $url]
+			if {[::http::ncode $token] == "200"} {
+				set indexhash_data [::http::data $token]
+			}
+			::http::reset $token
+			$token cleanup
+		}
 
-		if {![file exists $indexcachefile]} {
+		if {![info exists indexhash_data]} {
 			return -code error "Unable to fetch $url"
 		}
 
-		set fd [open $indexcachefile]
-		gets $fd indexhash_data
 		set indexhash [lindex [split $indexhash_data ","] 0]
-		close $fd
 
 		set file [download $hostname $indexhash]
 		set fd [open $file]
@@ -164,6 +183,8 @@ namespace eval ::appfs {
 			_db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
 
 		}
+
+		_db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate) VALUES ($hostname, $now);}
 
 		return COMPLETE
 	}
