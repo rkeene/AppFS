@@ -35,3 +35,7 @@ Database
 --------
     packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest)
     files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory)
+
+Resources
+---------
+http://appfs.rkeene.org/
