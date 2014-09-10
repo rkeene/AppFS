@@ -199,7 +199,7 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	}
 
 	tcl_ret = Tcl_Eval(interp, ""
-#include "appfs.tcl.h"
+#include "appfsd.tcl.h"
 	"");
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
@@ -924,80 +924,12 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 	return(read_ret);
 }
 
-#ifdef APPFS_TEST_DRIVER
-static int appfs_test_driver(void) {
-	struct appfs_site *sites, *site;
-	struct appfs_package *packages, *package;
-	struct appfs_children *files, *file;
-	char *sha1 = NULL;
-	int packages_count = 0, sites_count = 0, files_count;
-
-	sites = appfs_getsites(&sites_count);
-	printf("Sites:\n");
-	for (site = sites; site; site = site->_next) {
-		printf("\tname = %s\n", site->name);
-	}
-
-	appfs_free_list_site(sites);
-
-	packages = appfs_getindex("rkeene.org", &packages_count);
-	if (packages == NULL || packages_count == 0) {
-		fprintf(stderr, "Unable to fetch package index from rkeene.org.\n");
-
-		return(1);
-	}
-
-	for (package = packages; package; package = package->_next) {
-		sha1 = package->sha1;
-
-		printf("Package:\n\tname = %s\n\tversion = %s\n\tsha1 = %s\n\tos = %s\n\tcpuArch = %s\n",
-			package->name,
-			package->version,
-			package->sha1,
-			appfs_convert_os_toString(package->os),
-			appfs_convert_cpuArch_toString(package->cpuArch)
-		);
-	}
-
-	files = appfs_getchildren("rkeene.org", sha1, "", &files_count);
-	if (files == NULL) {
-		fprintf(stderr, "Unable to list files in the last package.\n");
-
-		return(1);
-	}
-
-	printf("Files:\n");
-	for (file = files; file; file = file->_next) {
-		printf("\t%s\n", file->name);
-	}
-
-	appfs_free_list_children(files);
-
-	files = appfs_getchildren("rkeene.org", sha1, "tcl", &files_count);
-	if (files == NULL) {
-		fprintf(stderr, "Unable to list files in the last package.\n");
-
-		return(1);
-	}
-
-	printf("Files:\n");
-	for (file = files; file; file = file->_next) {
-		printf("\ttcl/%s\n", file->name);
-	}
-
-	appfs_free_list_children(files);
-	appfs_free_list_package(packages);
-
-	return(0);
-}
-#else
 static struct fuse_operations appfs_oper = {
 	.getattr	= appfs_fuse_getattr,
 	.readdir	= appfs_fuse_readdir,
 	.open		= appfs_fuse_open,
 	.read		= appfs_fuse_read
 };
-#endif
 
 int main(int argc, char **argv) {
 	const char *cachedir = APPFS_CACHEDIR;
@@ -1028,10 +960,6 @@ int main(int argc, char **argv) {
 		return(1);
 	}
 
-#ifdef APPFS_TEST_DRIVER
-	return(appfs_test_driver());
-#else
 	return(fuse_main(argc, argv, &appfs_oper, NULL));
-#endif
 }
  

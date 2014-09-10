@@ -17,34 +17,24 @@ endif
 TCL_CFLAGS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_INCLUDE_SPEC}")
 TCL_LIBS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_LIB_SPEC}")
 
-all: appfs
+all: appfsd
 
-appfs: appfs.o
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o appfs appfs.o $(LIBS)
+appfsd: appfsd.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o appfsd appfsd.o $(LIBS)
 
-appfs-test: appfs-test.o
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o appfs-test appfs-test.o $(LIBS)
+appfsd.o: appfsd.c appfsd.tcl.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o appfsd.o -c appfsd.c
 
-appfs.o: appfs.c appfs.tcl.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o appfs.o -c appfs.c
+appfsd.tcl.h: appfsd.tcl stringify.tcl
+	./stringify.tcl appfsd.tcl > appfsd.tcl.h.new
+	mv appfsd.tcl.h.new appfsd.tcl.h
 
-appfs-test.o: appfs.c appfs.tcl.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DAPPFS_TEST_DRIVER=1 -o appfs-test.o -c appfs.c
-
-appfs.tcl.h: appfs.tcl stringify.tcl
-	./stringify.tcl appfs.tcl > appfs.tcl.h.new
-	mv appfs.tcl.h.new appfs.tcl.h
-
-install: appfs
-	cp appfs $(bindir)
-
-test: appfs-test
-	./appfs-test
+install: appfsd
+	cp appfsd $(bindir)
 
 clean:
-	rm -f appfs appfs.o
-	rm -f appfs-test appfs-test.o
-	rm -f appfs.tcl.h
+	rm -f appfsd appfsd.o
+	rm -f appfsd.tcl.h
 
 distclean: clean
 
