@@ -54,6 +54,10 @@ struct appfs_pathinfo {
 			off_t size;
 			char sha1[41];
 		} file;
+		struct {
+			off_t size;
+			char source[256];
+		} symlink;
 	} typeinfo;
 };
 
@@ -209,7 +213,6 @@ static void appfs_update_manifest(const char *hostname, const char *sha1) {
 
 	return;
 }
-
 
 #define appfs_free_list_type(id, type) static void appfs_free_list_ ## id(type *head) { \
 	type *obj, *next; \
@@ -437,6 +440,20 @@ static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, cha
 	if (strcmp(type, "directory") == 0) {
 		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
 		pathinfo->typeinfo.dir.childcount = 0;
+
+		return(0);
+	}
+
+	if (strcmp(type, "symlink") == 0) {
+		pathinfo->type = APPFS_PATHTYPE_SYMLINK;
+		pathinfo->typeinfo.dir.childcount = 0;
+
+		if (!source) {
+			source = ".BADLINK";
+		}
+
+		pathinfo->typeinfo.symlink.size = strlen(source);
+		snprintf(pathinfo->typeinfo.symlink.source, sizeof(pathinfo->typeinfo.symlink.source), "%s", source);
 
 		return(0);
 	}
@@ -688,11 +705,39 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	return(0);
 }
 
+static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
+	struct appfs_pathinfo pathinfo;
+	int res = 0;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	pathinfo.type = APPFS_PATHTYPE_INVALID;
+
+	res = appfs_get_path_info(path, &pathinfo, NULL);
+	if (res != 0) {
+		return(res);
+	}
+
+	if (pathinfo.type != APPFS_PATHTYPE_SYMLINK) {
+		return(-EINVAL);
+	}
+
+	if ((strlen(pathinfo.typeinfo.symlink.source) + 1) > size) {
+		return(-ENAMETOOLONG);
+	}
+
+	memcpy(buf, pathinfo.typeinfo.symlink.source, strlen(pathinfo.typeinfo.symlink.source) + 1);
+
+	return(0);
+}
+
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	struct appfs_pathinfo pathinfo;
 	int res = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	pathinfo.type = APPFS_PATHTYPE_INVALID;
 
 	res = appfs_get_path_info(path, &pathinfo, NULL);
 	if (res != 0) {
@@ -705,18 +750,30 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_ctime = pathinfo.time;
 	stbuf->st_atime = pathinfo.time;
 
-	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {
-		stbuf->st_mode = S_IFDIR | 0555;
-		stbuf->st_nlink = 2 + pathinfo.typeinfo.dir.childcount;
-	} else {
-		if (pathinfo.typeinfo.file.executable) {
-			stbuf->st_mode = S_IFREG | 0555;
-		} else {
-			stbuf->st_mode = S_IFREG | 0444;
-		}
+	switch (pathinfo.type) {
+		case APPFS_PATHTYPE_DIRECTORY:
+			stbuf->st_mode = S_IFDIR | 0555;
+			stbuf->st_nlink = 2 + pathinfo.typeinfo.dir.childcount;
+			break;
+		case APPFS_PATHTYPE_FILE:
+			if (pathinfo.typeinfo.file.executable) {
+				stbuf->st_mode = S_IFREG | 0555;
+			} else {
+				stbuf->st_mode = S_IFREG | 0444;
+			}
 
-		stbuf->st_nlink = 1;
-		stbuf->st_size = pathinfo.typeinfo.file.size;
+			stbuf->st_nlink = 1;
+			stbuf->st_size = pathinfo.typeinfo.file.size;
+			break;
+		case APPFS_PATHTYPE_SYMLINK:
+			stbuf->st_mode = S_IFLNK | 0555;
+			stbuf->st_nlink = 1;
+			stbuf->st_size = pathinfo.typeinfo.symlink.size;
+			break;
+		case APPFS_PATHTYPE_INVALID:
+			res = -EIO;
+
+			break;
 	}
 
 	return res;
@@ -813,6 +870,7 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 static struct fuse_operations appfs_oper = {
 	.getattr   = appfs_fuse_getattr,
 	.readdir   = appfs_fuse_readdir,
+	.readlink  = appfs_fuse_readlink,
 	.open      = appfs_fuse_open,
 	.release   = appfs_fuse_close,
 	.read      = appfs_fuse_read
