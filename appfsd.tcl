@@ -259,11 +259,11 @@ namespace eval ::appfs {
 					set fileInfo(perms) [lindex $work 1]
 					set fileInfo(sha1) [lindex $work 2]
 
-					set work [lrange 3 end]
+					set work [lrange $work 3 end]
 				}
 				"symlink" {
 					set fileInfo(source) [lindex $work 0]
-					set work [lrange 1 end]
+					set work [lrange $work 1 end]
 				}
 			}
 
