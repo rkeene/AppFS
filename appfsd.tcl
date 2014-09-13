@@ -6,6 +6,7 @@ package require sqlite3
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
 	variable ttl 3600
+	variable nttl 60
 
 	proc _hash_sep {hash {seps 4}} {
 		for {set idx 0} {$idx < $seps} {incr idx} {
@@ -145,7 +146,7 @@ namespace eval ::appfs {
 
 		if {![info exists indexhash_data]} {
 			# Cache this result for 60 seconds
-			_db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, 60);}
+			_db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::nttl);}
 
 			return -code error "Unable to fetch $url"
 		}
@@ -239,41 +240,43 @@ namespace eval ::appfs {
 		set pkgdata [read $fd]
 		close $fd
 
-		foreach line [split $pkgdata "\n"] {
-			set line [string trim $line]
+		_db transaction {
+			foreach line [split $pkgdata "\n"] {
+				set line [string trim $line]
 
-			if {$line == ""} {
-				continue
-			}
-
-			set work [split $line ","]
-
-			unset -nocomplain fileInfo
-			set fileInfo(type) [lindex $work 0]
-			set fileInfo(time) [lindex $work 1]
-
-			set work [lrange $work 2 end]
-			switch -- $fileInfo(type) {
-				"file" {
-					set fileInfo(size) [lindex $work 0]
-					set fileInfo(perms) [lindex $work 1]
-					set fileInfo(sha1) [lindex $work 2]
-
-					set work [lrange $work 3 end]
+				if {$line == ""} {
+					continue
 				}
-				"symlink" {
-					set fileInfo(source) [lindex $work 0]
-					set work [lrange $work 1 end]
+
+				set work [split $line ","]
+
+				unset -nocomplain fileInfo
+				set fileInfo(type) [lindex $work 0]
+				set fileInfo(time) [lindex $work 1]
+
+				set work [lrange $work 2 end]
+				switch -- $fileInfo(type) {
+					"file" {
+						set fileInfo(size) [lindex $work 0]
+						set fileInfo(perms) [lindex $work 1]
+						set fileInfo(sha1) [lindex $work 2]
+
+						set work [lrange $work 3 end]
+					}
+					"symlink" {
+						set fileInfo(source) [lindex $work 0]
+						set work [lrange $work 1 end]
+					}
 				}
+
+				set fileInfo(name) [join $work ","]
+				set fileInfo(name) [split [string trim $fileInfo(name) "/"] "/"]
+				set fileInfo(directory) [join [lrange $fileInfo(name) 0 end-1] "/"]
+				set fileInfo(name) [lindex $fileInfo(name) end]
+
+				_db eval {INSERT INTO files (package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(perms), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
+				_db eval {UPDATE packages SET haveManifest = 1 WHERE sha1 = $package_sha1;}
 			}
-
-			set fileInfo(name) [join $work ","]
-			set fileInfo(name) [split [string trim $fileInfo(name) "/"] "/"]
-			set fileInfo(directory) [join [lrange $fileInfo(name) 0 end-1] "/"]
-			set fileInfo(name) [lindex $fileInfo(name) end]
-
-			_db eval {INSERT INTO files (package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(perms), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
-			_db eval {UPDATE packages SET haveManifest = 1 WHERE sha1 = $package_sha1;}
 		}
 
 		return COMPLETE

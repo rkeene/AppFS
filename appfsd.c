@@ -13,7 +13,7 @@
 #include <fuse.h>
 #include <tcl.h>
 
-#define APPFS_CACHEDIR "/tmp/appfs-cache"
+#define APPFS_CACHEDIR "/var/cache/appfs"
 
 #define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 
