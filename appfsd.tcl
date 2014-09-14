@@ -84,6 +84,36 @@ namespace eval ::appfs {
 		return [uplevel 1 [list ::appfs::db {*}$args]]
 	}
 
+	proc _normalizeOS {os} {
+		set os [string tolower [string trim $os]]
+
+		switch -- $os {
+			"linux" - "freebsd" - "openbsd" - "netbsd" {
+				return $os
+			}
+			"sunos" {
+				return "solaris"
+			}
+		}
+
+		return -code error "Unable to normalize OS: $os"
+	}
+
+	proc _normalizeCPU {cpu} {
+		set cpu [string tolower [string trim $cpu]]
+
+		switch -glob -- $cpu {
+			"i?86" {
+				return "ix86"
+			}
+			"x86_64" {
+				return $cpu
+			}
+		}
+
+		return -code error "Unable to normalize CPU: $cpu"
+	}
+
 	proc init {} {
 		if {[info exists ::appfs::init_called]} {
 			return
@@ -179,8 +209,8 @@ namespace eval ::appfs {
 			unset -nocomplain pkgInfo
 			set pkgInfo(package)  [lindex $work 0]
 			set pkgInfo(version)  [lindex $work 1]
-			set pkgInfo(os)       [lindex $work 2]
-			set pkgInfo(cpuArch)  [lindex $work 3]
+			set pkgInfo(os)       [_normalizeOS [lindex $work 2]]
+			set pkgInfo(cpuArch)  [_normalizeCPU [lindex $work 3]]
 			set pkgInfo(hash)     [string tolower [lindex $work 4]]
 			set pkgInfo(hash_type) "sha1"
 			set pkgInfo(isLatest) [expr {!![lindex $work 5]}]
