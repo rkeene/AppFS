@@ -101,7 +101,6 @@ for package in *; do
 			(
 				cd "${os_cpuArch}" || exit 1
 
-
 				for version in *; do
 					if [ -h "${version}" ]; then
 						continue
