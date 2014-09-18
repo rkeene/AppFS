@@ -38,23 +38,14 @@ function postconfigure() {
 }
 
 function configure() {
-	dynlinker=/opt/appfs/
-DYNLINKER=/uri/0install/sw.oc9.org/`readlink /uri/0install/sw.oc9.org/lib/ld-linux.so.2 | sed s@^\.\./@@`
-LDFLAGS="-march=i486 ${ZEXTRALIB} -L/uri/0install/sw.oc9.org/lib -Wl,--rpath -Wl,/uri/0install/sw.oc9.org/lib -Wl,--dynamic-linker -Wl,${DYNLINKER}"
-CXXINCLUDES=/uri/0install/sw.oc9.org/include/c++/`ls -1 /uri/0install/sw.oc9.org/include/c++ | sed  's@.*@&. |&@;s@\(|.*\)\(\.\)@\1,@g;s@^@.@;s@\.@..@g;s@\.\([0-9]\)\.@.00\1\.@g;s@\.\([0-9][0-9]\)\.@.0\1.@g;s
-@\.\.@.@g;s@^\.@@;s@\.$@@' | sort | tail -1 | cut -f 2- -d '|' | sed s@,@.@g`
+	glibcvers=2.20
+	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/platform/${glibcvers}"
+	dynlinker="$(ls "${glibcdir}"/lib/ld-linux*.so.* | tail -n 1)"
 
-echo "CFLAGS='-march=i486 ${ZEXTRAINC} -I/uri/0install/sw.oc9.org/include'"
-echo "CXXFLAGS='-march=i486 ${ZEXTRAINC} -I${CXXINCLUDES} -I${CXXINCLUDES}/i486-pc-linux-gnu'"
-echo "CPPFLAGS='${ZEXTRAINC} -I/uri/0install/sw.oc9.org/include -I${CXXINCLUDES} -I${CXXINCLUDES}/i486-pc-linux-gnu'"
-echo "LDFLAGS='${LDFLAGS}'"
-echo "CC='gcc'"
-echo "PATH='${ZEXTRAPATH}:/uri/0install/sw.oc9.org/bin:`fix_path ${PATH} sw.oc9.org`'" | fix_path
-echo "LD_RUN_PATH='${ZBUILDPATH}:/uri/0install/sw.oc9.org/lib:`fix_path ${LD_RUN_PATH} sw.oc9.org`'" | fix_path
-echo "LD_LIBRARY_PATH='/uri/0install/sw.oc9.org/lib:`fix_path ${LD_LIBRARY_PATH} sw.oc9.org`'" | fix_path
-echo "PKG_CONFIG_PATH='${ZBUILDPATH}/lib/pkgconfig:/uri/0install/sw.oc9.org/lib/pkgconfig:`fix_path ${PKG_CONFIG_PATH} sw.oc9.org`'" | fix_path
-echo "MANPATH='${ZBUILDPATH}/man:/uri/0install/sw.oc9.org/man:`fix_path ${MANPATH} sw.oc9.org`'" | fix_path
-echo "export CFLAGS CPPFLAGS LDFLAGS PATH LD_LIBRARY_PATH LD_RUN_PATH PKG_CONFIG_PATH MANPATH CC"
+	CFLAGS="-I${glibcdir}/include"
+	CPPFLAGS="-I${glibcdir}/include"
+	LDFLAGS="-Wl,--rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
+	export CFLAGS CPPFLAGS LDFLAGS
 
 	./configure --prefix="${prefix}" --sysconfdir=/etc --localstatedir=/var
 }
