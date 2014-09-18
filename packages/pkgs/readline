@@ -1,0 +1,6 @@
+#! /usr/bin/env bash
+
+version=6.3
+url="https://ftp.gnu.org/gnu/readline/readline-${version}.tar.gz"
+domain=core.appfs.rkeene.org
+sha256=''

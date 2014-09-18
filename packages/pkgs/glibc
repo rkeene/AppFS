@@ -1,0 +1,16 @@
+#! /usr/bin/env bash
+
+version=2.20
+url="http://ftp.gnu.org/gnu/glibc/glibc-${version}.tar.xz"
+domain=core.appfs.rkeene.org
+sha256=''
+
+function configure() {
+        set -x
+	mkdir BUILD
+	cd BUILD
+
+	../configure --prefix="${prefix}" --sysconfdir=/etc --localstatedir=/var || return 1
+
+	echo '# Ignore: DESTDIR' >> Makefile
+}

@@ -1,0 +1,215 @@
+#! /usr/bin/env bash
+
+pkg="$(echo "$1" | sed 's@/*$@@;s@^\.*/*@@')"
+
+if [ -z "${pkg}" ]; then
+	echo "Usage: build <package>" 2>&1
+
+	exit 1
+fi
+
+function determineOsArch() {
+	os="$(uname -s | dd conv=lcase 2>/dev/null)"
+	arch="$(uname -m | dd conv=lcase 2>/dev/null)"
+
+	case "${arch}" in
+		i?86)
+			arch='ix86'
+			;;
+	esac
+}
+
+function determinePrefix() {
+	determineOsArch
+
+	prefixsuffix="${pkg}/${os}-${arch}/${version}"
+	prefix="/opt/appfs/${domain}/${prefixsuffix}"
+	destdir="$(pwd)/INST"
+
+	mkdir "${destdir}" || die
+}
+
+function preconfigure() {
+	:
+}
+
+function postconfigure() {
+	:
+}
+
+function configure() {
+	dynlinker=/opt/appfs/
+DYNLINKER=/uri/0install/sw.oc9.org/`readlink /uri/0install/sw.oc9.org/lib/ld-linux.so.2 | sed s@^\.\./@@`
+LDFLAGS="-march=i486 ${ZEXTRALIB} -L/uri/0install/sw.oc9.org/lib -Wl,--rpath -Wl,/uri/0install/sw.oc9.org/lib -Wl,--dynamic-linker -Wl,${DYNLINKER}"
+CXXINCLUDES=/uri/0install/sw.oc9.org/include/c++/`ls -1 /uri/0install/sw.oc9.org/include/c++ | sed  's@.*@&. |&@;s@\(|.*\)\(\.\)@\1,@g;s@^@.@;s@\.@..@g;s@\.\([0-9]\)\.@.00\1\.@g;s@\.\([0-9][0-9]\)\.@.0\1.@g;s
+@\.\.@.@g;s@^\.@@;s@\.$@@' | sort | tail -1 | cut -f 2- -d '|' | sed s@,@.@g`
+
+echo "CFLAGS='-march=i486 ${ZEXTRAINC} -I/uri/0install/sw.oc9.org/include'"
+echo "CXXFLAGS='-march=i486 ${ZEXTRAINC} -I${CXXINCLUDES} -I${CXXINCLUDES}/i486-pc-linux-gnu'"
+echo "CPPFLAGS='${ZEXTRAINC} -I/uri/0install/sw.oc9.org/include -I${CXXINCLUDES} -I${CXXINCLUDES}/i486-pc-linux-gnu'"
+echo "LDFLAGS='${LDFLAGS}'"
+echo "CC='gcc'"
+echo "PATH='${ZEXTRAPATH}:/uri/0install/sw.oc9.org/bin:`fix_path ${PATH} sw.oc9.org`'" | fix_path
+echo "LD_RUN_PATH='${ZBUILDPATH}:/uri/0install/sw.oc9.org/lib:`fix_path ${LD_RUN_PATH} sw.oc9.org`'" | fix_path
+echo "LD_LIBRARY_PATH='/uri/0install/sw.oc9.org/lib:`fix_path ${LD_LIBRARY_PATH} sw.oc9.org`'" | fix_path
+echo "PKG_CONFIG_PATH='${ZBUILDPATH}/lib/pkgconfig:/uri/0install/sw.oc9.org/lib/pkgconfig:`fix_path ${PKG_CONFIG_PATH} sw.oc9.org`'" | fix_path
+echo "MANPATH='${ZBUILDPATH}/man:/uri/0install/sw.oc9.org/man:`fix_path ${MANPATH} sw.oc9.org`'" | fix_path
+echo "export CFLAGS CPPFLAGS LDFLAGS PATH LD_LIBRARY_PATH LD_RUN_PATH PKG_CONFIG_PATH MANPATH CC"
+
+	./configure --prefix="${prefix}" --sysconfdir=/etc --localstatedir=/var
+}
+
+function prebuild() {
+	:
+}
+
+function postbuild() {
+	:
+}
+
+function build() {
+	grep "DESTDIR" Makefile || die "Don't know how to build this software"
+
+	make
+}
+
+function preinstall() {
+	:
+}
+
+function postinstall() {
+	:
+}
+
+function install() {
+	make install DESTDIR="${destdir}"
+}
+
+function cleanup() {
+	cd "${workdir}" || exit 1
+	cd .. || exit 1
+	rm -rf "${workdir}"
+}
+
+function die() {
+	local message
+
+	message="$1"
+
+	if [ -n "${message}" ]; then
+		echo "error: ${message}" >&2
+	fi
+
+	cleanup
+
+	exit 1
+}
+
+cd "$(dirname "$(which "$0")")" || exit 1
+
+if [ -f 'build.conf' ]; then
+	. 'build.conf'
+fi
+
+if [ -d "pkgs/${pkg}" ]; then
+	pkgdir="pkgs/${pkg}"
+	pkgfile="${pkgdir}/info"
+else
+	pkgfile="pkgs/${pkg}"
+	pkgdir="${pkgfile}"
+fi
+pkgdate="$(find "${pkgdir}" -type f -printf '%TY%Tm%Td%TH%TM.%TS\n' | cut -f 1-2 -d '.' | sort -n | tail -n 1)"
+
+. "${pkgfile}"
+
+archivedir="$(pwd)/ARCHIVE"
+workdir="workdir-$$${RANDOM}${RANDOM}${RANDOM}"
+mkdir "${workdir}" "${archivedir}"
+cd "${workdir}" || exit 1
+workdir="$(pwd)"
+
+# Download
+## Cleanup
+rm -f src.new src
+
+## Fetch file
+wget -O src.new "${url}" || exit 1
+
+## Verify signature
+### XXX:TODO
+
+## Move file into place
+mv src.new src
+
+# Decompress archive
+## Determine type of archive
+case "${url}" in
+	*.tar.xz|*.tar.xz'?'*|*.txz)
+		decompress='xz'
+		;;
+	*.tar.gz|*.tar.gz'?'*|*.tgz)
+		decompress='gzip'
+		;;
+	*.tar.bz2|*.tar.bz2'?'*|*.tbz2)
+		decompress='bzip2'
+		;;
+	*.zip|*.zip'?'*)
+		decompress='unzip'
+		;;
+	*)
+		echo "Unknown compression method: ${url}" >&2
+
+		exit 1
+		;;
+esac
+
+## Do decompression
+case "${decompress}" in
+	unzip)
+		unzip 'src' || die 'Unable to uncompress archive'
+		;;
+	*)
+		"${decompress}" -dc src | tar -xf - || die 'Unable to uncompress archive'
+		;;
+esac
+
+## Cleanup source
+rm -f src
+
+# If we just have one directory, use that directory
+dir="$(echo *)"
+if [ -e "${dir}" ]; then
+	mv "${dir}"/* .
+fi
+
+# Start logging
+set -x
+
+# Determine properties
+determinePrefix
+
+# Start the build
+preconfigure || die 'preconfigure failed'
+configure || die 'configure failed'
+postconfigure || die 'postconfigure failed'
+
+prebuild || die 'prebuild failed'
+build || die 'build failed'
+postbuild || die 'postbuild failed'
+
+preinstall || die 'preinstall failed'
+install || die 'install failed'
+postinstall || die 'postinstall failed'
+
+(
+	appdir="$(appfsinstalldir)/${prefixsuffix}"
+	mkdir -p "${appdir}"
+
+	cd "${destdir}/${prefix}" || exit 1
+	cp -rp * "${appdir}"
+	find "${appdir}" -print0 | xargs -0 touch -t "${pkgdate}"
+)
+
+cleanup
+
+exit 0
