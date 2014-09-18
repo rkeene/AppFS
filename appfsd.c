@@ -17,7 +17,11 @@
 #define APPFS_CACHEDIR "/var/cache/appfs"
 #endif
 
+#ifdef DEBUG
 #define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
+#else
+#define APPFS_DEBUG(x...) /**/
+#endif
 
 static pthread_key_t interpKey;
 
