@@ -13,7 +13,9 @@
 #include <fuse.h>
 #include <tcl.h>
 
+#ifndef APPFS_CACHEDIR
 #define APPFS_CACHEDIR "/var/cache/appfs"
+#endif
 
 #define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 
@@ -23,6 +25,7 @@ struct appfs_thread_data {
 	sqlite3 *db;
 	const char *cachedir;
 	time_t boottime;
+	const char *platform;
 };
 
 struct appfs_thread_data globalThread;
@@ -545,6 +548,24 @@ static int appfs_get_path_info_sql(char *sql, int argc, const char *fmt, struct 
 
 	return(0);
 }
+
+static int appfs_add_path_child(const char *name, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
+	struct appfs_children *new_child;
+
+	pathinfo->typeinfo.dir.childcount++;
+
+	if (children) {
+		new_child = (void *) ckalloc(sizeof(*new_child));
+		new_child->_next = *children;
+
+		snprintf(new_child->name, sizeof(new_child->name), "%s", name);
+
+		*children = new_child;
+	}
+
+	return(0);
+}
+
 /* Get information about a path, and optionally list children */
 static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
 	struct appfs_children *dir_children;
@@ -624,7 +645,15 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 
 		free(path_s);
 
-		return(appfs_get_path_info_sql(sql, 2, "%s-%s", pathinfo, children));
+		retval = appfs_get_path_info_sql(sql, 2, "%s-%s", pathinfo, children);
+
+		if (retval != 0) {
+			return(retval);
+		}
+
+		appfs_add_path_child("platform", pathinfo, children);
+
+		return(retval);
 	}
 
 	version = strchr(os_cpuArch, '/');
@@ -639,9 +668,24 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	if (cpuArch) {
 		*cpuArch = '\0';
 		cpuArch++;
+	} else {
+		cpuArch = "";
 	}
 
 	if (version == NULL) {
+		if (strcmp(os, "platform") == 0 && strcmp(cpuArch, "") == 0) {
+			pathinfo->type = APPFS_PATHTYPE_SYMLINK;
+			pathinfo->time = globalThread.boottime;
+			pathinfo->typeinfo.dir.childcount = 0;
+			pathinfo->typeinfo.symlink.size = strlen(globalThread.platform);
+
+			snprintf(pathinfo->typeinfo.symlink.source, sizeof(pathinfo->typeinfo.symlink.source), "%s", globalThread.platform);
+
+			free(path_s);
+
+			return(0);
+		}
+
 		/* Request for version list for a package on an OS/CPU */
 		appfs_update_index(hostname);
 
@@ -883,6 +927,7 @@ int main(int argc, char **argv) {
 
 	globalThread.cachedir = cachedir;
 	globalThread.boottime = time(NULL);
+	globalThread.platform = "linux-x86_64";
 
 	pthread_ret = pthread_key_create(&interpKey, NULL);
 	if (pthread_ret != 0) {
