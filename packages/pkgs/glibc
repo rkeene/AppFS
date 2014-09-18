@@ -6,7 +6,6 @@ domain=core.appfs.rkeene.org
 sha256=''
 
 function configure() {
-        set -x
 	mkdir BUILD
 	cd BUILD
 
