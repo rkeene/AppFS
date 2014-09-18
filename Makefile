@@ -1,6 +1,6 @@
 CC = gcc
 PKG_CONFIG = pkg-config
-CFLAGS = -Wall -g3 -ggdb3 $(shell $(PKG_CONFIG) --cflags fuse) $(shell $(PKG_CONFIG) --cflags sqlite3) $(TCL_CFLAGS)
+CFLAGS = -Wall $(shell $(PKG_CONFIG) --cflags fuse) $(shell $(PKG_CONFIG) --cflags sqlite3) $(TCL_CFLAGS)
 LDFLAGS = $(TCL_LDFLAGS)
 LIBS = $(shell $(PKG_CONFIG) --libs fuse) $(shell $(PKG_CONFIG) --libs sqlite3) $(TCL_LIBS)
 PREFIX = /usr/local
