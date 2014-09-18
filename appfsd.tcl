@@ -127,9 +127,15 @@ namespace eval ::appfs {
 			sqlite3 ::appfs::db [file join $::appfs::cachedir cache.db]
 		}
 
+		# Create tables
 		_db eval {CREATE TABLE IF NOT EXISTS sites(hostname PRIMARY KEY, lastUpdate, ttl);}
 		_db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest);}
 		_db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory);}
+
+		# Create indexes
+		_db eval {CREATE INDEX IF NOT EXISTS sites_index ON sites (hostname);}
+		_db eval {CREATE INDEX IF NOT EXISTS packages_index ON packages (hostname, package, version, os, cpuArch);}
+		_db eval {CREATE INDEX IF NOT EXISTS files_index ON files (package_sha1, file_name, file_directory);}
 	}
 
 	proc download {hostname hash {method sha1}} {
