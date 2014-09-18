@@ -48,6 +48,7 @@ struct appfs_pathinfo {
 	appfs_pathtype_t type;
 	time_t time;
 	char hostname[256];
+	unsigned long long inode;
 	union {
 		struct {
 			int childcount;
@@ -275,6 +276,8 @@ static struct appfs_children *appfs_getchildren(const char *hostname, const char
 	if (sqlite_ret != SQLITE_OK) {
 		APPFS_DEBUG("Call to sqlite3_exec failed.");
 
+		appfs_free_list_children(head);
+
 		return(NULL);
 	}
 
@@ -402,7 +405,7 @@ static char *appfs_lookup_package_hash(const char *hostname, const char *package
 
 static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, char **names) {
 	struct appfs_pathinfo *pathinfo = _pathinfo;
-	const char *type, *time, *source, *size, *perms, *sha1;
+	const char *type, *time, *source, *size, *perms, *sha1, *rowid;
 
 	type = values[0];
 	time = values[1];
@@ -410,8 +413,12 @@ static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, cha
 	size = values[3];
 	perms = values[4];
 	sha1 = values[5];
+	rowid = values[6];
 
 	pathinfo->time = strtoull(time, NULL, 10);
+
+	/* Package file inodes start at 2^32, fake inodes are before then */
+	pathinfo->inode = strtoull(rowid, NULL, 10) + 4294967296ULL;
 
 	if (strcmp(type, "file") == 0) {
 		pathinfo->type = APPFS_PATHTYPE_FILE;
@@ -490,7 +497,7 @@ static int appfs_getfileinfo(const char *hostname, const char *package_hash, con
 		file++;
 	}
 
-	sql = sqlite3_mprintf("SELECT type, time, source, size, perms, file_sha1 FROM files WHERE package_sha1 = %Q AND file_directory = %Q AND file_name = %Q;", package_hash, directory, file);
+	sql = sqlite3_mprintf("SELECT type, time, source, size, perms, file_sha1, rowid FROM files WHERE package_sha1 = %Q AND file_directory = %Q AND file_name = %Q;", package_hash, directory, file);
 	if (sql == NULL) {
 		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
 
@@ -566,6 +573,25 @@ static int appfs_add_path_child(const char *name, struct appfs_pathinfo *pathinf
 	return(0);
 }
 
+/* Generate an inode for a given path */
+static long long appfs_get_path_inode(const char *path) {
+	long long retval;
+	const char *p;
+
+	retval = 10;
+
+	for (p = path; *p; p++) {
+		retval %= 4290960290ULL;
+		retval += *p;
+		retval <<= 7;
+	}
+
+	retval += 10;
+	retval %= 4294967296ULL;
+
+	return(retval);
+}
+
 /* Get information about a path, and optionally list children */
 static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
 	struct appfs_children *dir_children;
@@ -591,6 +617,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	if (_path[1] == '\0') {
 		/* Request for the root directory */
 		pathinfo->hostname[0] = '\0';
+		pathinfo->inode = 1;
 
 		sql = sqlite3_mprintf("SELECT DISTINCT hostname FROM packages;");
 
@@ -610,6 +637,8 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 
 	path = strdup(_path);
 	path_s = path;
+
+	pathinfo->inode = appfs_get_path_inode(path);
 
 	hostname = path + 1;
 	packagename = strchr(hostname, '/');
@@ -741,6 +770,8 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 
 		if (children) {
 			*children = dir_children;
+		} else {
+			appfs_free_list_children(dir_children);
 		}
 	}
 
@@ -793,6 +824,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_mtime = pathinfo.time;
 	stbuf->st_ctime = pathinfo.time;
 	stbuf->st_atime = pathinfo.time;
+	stbuf->st_ino   = pathinfo.inode;
 
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
