@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <fuse.h>
+#include <pwd.h>
 #include <tcl.h>
 
 #ifndef APPFS_CACHEDIR
@@ -30,6 +31,9 @@ struct appfs_thread_data {
 	const char *cachedir;
 	time_t boottime;
 	const char *platform;
+	struct {
+		int writable;
+	} options;
 };
 
 struct appfs_thread_data globalThread;
@@ -254,10 +258,75 @@ static int appfs_getchildren_cb(void *_head, int columns, char **values, char **
 	
 }
 
+static uid_t appfs_get_fsuid(void) {
+	struct fuse_context *ctx;
+
+	ctx = fuse_get_context();
+	if (ctx == NULL) {
+		return(1);
+	}
+
+	return(ctx->uid);
+}
+
+static const char *appfs_get_homedir(uid_t fsuid) {
+	struct passwd entry, *result;
+	struct stat stbuf;
+	char buf[1024], *retval;
+	int gpu_ret, stat_ret;
+
+	gpu_ret = getpwuid_r(fsuid, &entry, buf, sizeof(buf), &result);
+	if (gpu_ret != 0) {
+		APPFS_DEBUG("getpwuid_r(%llu, ...) returned in failure", (unsigned long long) fsuid);
+
+		return(NULL);
+	}
+
+	if (result == NULL) {
+		APPFS_DEBUG("getpwuid_r(%llu, ...) returned NULL result", (unsigned long long) fsuid);
+
+		return(NULL);
+	}
+
+	if (result->pw_dir == NULL) {
+		APPFS_DEBUG("getpwuid_r(%llu, ...) returned NULL home directory", (unsigned long long) fsuid);
+
+		return(NULL);
+	}
+
+	stat_ret = stat(result->pw_dir, &stbuf);
+	if (stat_ret != 0) {
+		APPFS_DEBUG("stat(%s) returned in failure", result->pw_dir);
+
+		return(NULL);
+	}
+
+	if (stbuf.st_uid != fsuid) {
+		APPFS_DEBUG("UID mis-match on user %llu's home directory (%s).  It's owned by %llu.",
+		    (unsigned long long) fsuid,
+		    result->pw_dir,
+		    (unsigned long long) stbuf.st_uid
+		);
+
+		return(NULL);
+	}
+
+	retval = sqlite3_mprintf("%s", result->pw_dir);
+
+	return(retval);
+}
+
+static struct appfs_children *appfs_getchildren_fs(struct appfs_children *in_children, const char *fspath) {
+	APPFS_DEBUG("Searching %s", fspath);
+
+	return(in_children);
+}
+
 static struct appfs_children *appfs_getchildren(const char *hostname, const char *package_hash, const char *path, int *children_count_p) {
 	struct appfs_children *head = NULL;
-	char *sql;
+	char *sql, *filebuf, *homedir = NULL;
 	int sqlite_ret;
+	uid_t fsuid;
 
 	if (children_count_p == NULL) {
 		return(NULL);
@@ -285,8 +354,47 @@ static struct appfs_children *appfs_getchildren(const char *hostname, const char
 		return(NULL);
 	}
 
+	if (globalThread.options.writable) {
+		/* Determine user of process accessing this file */
+		fsuid = appfs_get_fsuid();
+
+		/* Check filesystem paths for updated files */
+		/** Check the global directory (/etc) **/
+		filebuf = sqlite3_mprintf("/etc/appfs/%s/%s", package_hash, path);
+		if (filebuf == NULL) {
+			APPFS_DEBUG("Call to sqlite3_mprintf failed.");
+
+			return(NULL);
+		}
+
+		head = appfs_getchildren_fs(head, filebuf);
+
+		sqlite3_free(filebuf);
+
+		/** Check the user's directory, if we are not root **/
+		if (fsuid != 0) {
+			homedir = (char *) appfs_get_homedir(fsuid);
+		}
+
+		if (homedir != NULL) {
+			filebuf = sqlite3_mprintf("%z/.appfs/%s/%s", homedir, package_hash, path);
+
+			if (filebuf == NULL) {
+				APPFS_DEBUG("Call to sqlite3_mprintf failed.");
+
+				return(NULL);
+			}
+
+			head = appfs_getchildren_fs(head, filebuf);
+
+			sqlite3_free(filebuf);
+		}
+	}
+
 	if (head != NULL) {
 		*children_count_p = head->counter + 1;
+	} else {
+		*children_count_p = 0;
 	}
 
 	return(head);
@@ -829,6 +937,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_ctime = pathinfo.time;
 	stbuf->st_atime = pathinfo.time;
 	stbuf->st_ino   = pathinfo.inode;
+	stbuf->st_mode  = 0;
 
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
@@ -854,6 +963,10 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			res = -EIO;
 
 			break;
+	}
+
+	if (globalThread.options.writable) {
+		stbuf->st_mode |= 0222;
 	}
 
 	return res;
@@ -964,6 +1077,7 @@ int main(int argc, char **argv) {
 	globalThread.cachedir = cachedir;
 	globalThread.boottime = time(NULL);
 	globalThread.platform = "linux-x86_64";
+	globalThread.options.writable = 1;
 
 	pthread_ret = pthread_key_create(&interpKey, NULL);
 	if (pthread_ret != 0) {
