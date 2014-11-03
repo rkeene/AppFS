@@ -116,7 +116,10 @@ if [ ! -e "${pkgfile}" ]; then
 	exit 1
 fi
 
-pkgdate="$(find "${pkgdir}" -type f -printf '%TY%Tm%Td%TH%TM.%TS\n' 2>/dev/null | cut -f 1-2 -d '.' | sort -n | tail -n 1)"
+pkgdate="$(for artifact in $(find "${pkgdir}" -type f -print0 | xargs -n 1 -0 fossil finfo --limit 1 --width 0 2>/dev/null | grep '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ' | sed 's@^[^ ]* \[@@;s@\].*@@' | sort -u); do fossil info "${artifact}" | awk '/^uuid:/{ print $3 "T" $4 }' | sed 's@[-:]@@g;s@..$@\.&@'; done | sort -n | tail -n 1)"
+if [ -z "${pkgdate}" ]; then
+	pkgdate="$(find "${pkgdir}" -type f -printf '%TY%Tm%Td%TH%TM.%TS\n' 2>/dev/null | cut -f 1-2 -d '.' | sort -n | tail -n 1)"
+fi
 
 . "${pkgfile}"
 
