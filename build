@@ -109,28 +109,44 @@ else
 	pkgfile="pkgs/${pkg}"
 	pkgdir="${pkgfile}"
 fi
-pkgdate="$(find "${pkgdir}" -type f -printf '%TY%Tm%Td%TH%TM.%TS\n' | cut -f 1-2 -d '.' | sort -n | tail -n 1)"
+
+if [ ! -e "${pkgfile}" ]; then
+	echo "Invalid package." >&2
+
+	exit 1
+fi
+
+pkgdate="$(find "${pkgdir}" -type f -printf '%TY%Tm%Td%TH%TM.%TS\n' 2>/dev/null | cut -f 1-2 -d '.' | sort -n | tail -n 1)"
 
 . "${pkgfile}"
 
 archivedir="$(pwd)/ARCHIVE"
 workdir="workdir-$$${RANDOM}${RANDOM}${RANDOM}"
-mkdir "${workdir}" "${archivedir}"
+srcfile="${archivedir}/${pkg}"
+mkdir "${archivedir}" >/dev/null 2>/dev/null
+mkdir "${workdir}" || exit 1
 cd "${workdir}" || exit 1
 workdir="$(pwd)"
 
-# Download
-## Cleanup
-rm -f src.new src
+if [ ! -e "${srcfile}" ]; then
+	# Download
+	## Cleanup
+	rm -f src.new src
 
-## Fetch file
-wget -O src.new "${url}" || exit 1
+	## Fetch file
+	wget -O src.new "${url}" || exit 1
 
-## Verify signature
-### XXX:TODO
+	## Verify signature
+	src_sha256="$(openssl sha256 'src.new' | sed 's@^.*= @@')"
+	if [ "${src_sha256}" != "${sha256}" ]; then
+		echo "SHA256 mismatch:  Downloaded: ${src_sha256} != Expected: ${sha256}" >&2
 
-## Move file into place
-mv src.new src
+		exit 1
+	fi
+
+	## Move file into place
+	mv src.new "${archivedir}/${pkg}"
+fi
 
 # Decompress archive
 ## Determine type of archive
@@ -157,10 +173,10 @@ esac
 ## Do decompression
 case "${decompress}" in
 	unzip)
-		unzip 'src' || die 'Unable to uncompress archive'
+		unzip "${srcfile}" || die 'Unable to uncompress archive'
 		;;
 	*)
-		"${decompress}" -dc src | tar -xf - || die 'Unable to uncompress archive'
+		"${decompress}" -dc "${srcfile}" | tar -xf - || die 'Unable to uncompress archive'
 		;;
 esac
 
