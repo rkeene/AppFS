@@ -2,6 +2,7 @@
 
 package require http 2.7
 package require sqlite3
+package require sha1
 
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
@@ -47,9 +48,9 @@ namespace eval ::appfs {
 			close $fd
 
 			if {$keyIsHash} {
+				set hash "__UNABLE_TO_COMPUTE_HASH__"
 				catch {
-					set hash [string tolower [exec openssl sha1 $tmpfile]]
-					regsub {.*= *} $hash {} hash
+					set hash [string tolower [sha1::sha1 -hex -file $tmpfile]]
 				}
 			} else {
 				set hash $key
