@@ -131,6 +131,10 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	int retval;
 	int i;
 
+	if (interp == NULL) {
+		return(TCL_ERROR);
+	}
+
 	objv = (void *) ckalloc(sizeof(*objv) * objc);
 	objv[0] = Tcl_NewStringObj(cmd, -1);
 	Tcl_IncrRefCount(objv[0]);
@@ -168,6 +172,10 @@ static void appfs_update_index(const char *hostname) {
 	if (interp == NULL) {
 		interp = appfs_create_TclInterp(globalThread.cachedir);
 
+		if (interp == NULL) {
+			return;
+		}
+
 		pthread_setspecific(interpKey, interp);
 	}
 
@@ -189,6 +197,10 @@ static const char *appfs_getfile(const char *hostname, const char *sha1) {
 	interp = pthread_getspecific(interpKey);
 	if (interp == NULL) {
 		interp = appfs_create_TclInterp(globalThread.cachedir);
+
+		if (interp == NULL) {
+			return(NULL);
+		}
 
 		pthread_setspecific(interpKey, interp);
 	}
@@ -212,6 +224,10 @@ static void appfs_update_manifest(const char *hostname, const char *sha1) {
 	interp = pthread_getspecific(interpKey);
 	if (interp == NULL) {
 		interp = appfs_create_TclInterp(globalThread.cachedir);
+
+		if (interp == NULL) {
+			return;
+		}
 
 		pthread_setspecific(interpKey, interp);
 	}
