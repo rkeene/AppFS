@@ -48,10 +48,7 @@ namespace eval ::appfs {
 			close $fd
 
 			if {$keyIsHash} {
-				set hash "__UNABLE_TO_COMPUTE_HASH__"
-				catch {
-					set hash [string tolower [sha1::sha1 -hex -file $tmpfile]]
-				}
+				set hash [string tolower [sha1::sha1 -hex -file $tmpfile]]
 			} else {
 				set hash $key
 			}
