@@ -19,6 +19,64 @@ if [ -z "${pkg}" ]; then
 	exit 1
 fi
 
+function verifyRequiredPackages() {
+	local pkg pkgdomain pkgversion
+	local pkgdir pkgconfigdir pkgfound
+
+	for pkg in "${require[@]}"; do
+		pkgdomain=''
+		pkgversion=''
+
+		case "${pkg}" in
+			*/*@*)
+				pkgdomain="$(echo "${pkg}" | cut -f 2 -d '@')"
+				pkgversion="$(echo "${pkg}" | cut -f 2 -d '/' | cut -f 1 -d '@')"
+				pkg="$(echo "${pkg}" | cut -f 1 -d '/')"
+				;;
+			*/*)
+				pkgversion="$(echo "${pkg}" | cut -f 2 -d '/')"
+				pkg="$(echo "${pkg}" | cut -f 1 -d '/')"
+				;;
+			*@*)
+				pkgdomain="$(echo "${pkg}" | cut -f 2 -d '@')"
+				pkg="$(echo "${pkg}" | cut -f 1 -d '@')"
+				;;
+		esac
+
+		if [ -z "${pkgdomain}" ]; then
+			pkgdomain="${domain}"
+		fi
+
+		pkgfound='0'
+		for pkgdir in "/opt/appfs/${pkgdomain}/${pkg}/platform"/${pkgversion:-*}; do
+			pkgconfigdir="${pkgdir}/lib/pkgconfig"
+
+			if [ -d "${pkgdir}" ]; then
+				pkgfound='1'
+			fi
+
+			CFLAGS="${CFLAGS} -I${pkgdir}/include"
+			CPPFLAGS="${CPPFLAGS} -I${pkgdir}/include"
+			LDFLAGS="${LDFLAGS} -L${pkgdir}/lib"
+			export CFLAGS CPPFLAGS LDFLAGS
+
+			if [ -d "${pkgconfigdir}" ]; then
+				PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:${pkgconfigdir}"
+				export PKG_CONFIG_PATH
+			fi
+
+		done
+
+		if [ "${pkgfound}" = '0' ]; then
+			die "Package ${pkg}/${pkgversion:-*}@${pkgdomain} not found."
+		fi
+	done
+}
+
+function verifyPrerequisites() {
+	:
+}
+
 function determineOsArch() {
 	os="$(uname -s | dd conv=lcase 2>/dev/null)"
 	arch="$(uname -m | dd conv=lcase 2>/dev/null)"
@@ -57,10 +115,11 @@ function configure() {
 		die 'glibc directory is not available (appfs running/working?)'
 	fi
 
-	CFLAGS="-I${glibcdir}/include"
-	CPPFLAGS="-I${glibcdir}/include"
-	LDFLAGS="-Wl,--rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
-	export CFLAGS CPPFLAGS LDFLAGS
+	CFLAGS="${CFLAGS} -I${glibcdir}/include"
+	CPPFLAGS="${CPPFLAGS} -I${glibcdir}/include"
+	LDFLAGS="${LDFLAGS} -Wl,--rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
+	PKG_CONFIG_LIBDIR="${glibcdir}/lib/pkgconfig"
+	export CFLAGS CPPFLAGS LDFLAGS PKG_CONFIG_LIBDIR
 
 	./configure --prefix="${prefix}" --sysconfdir=/etc --localstatedir=/var
 }
@@ -213,6 +272,10 @@ dir="$(echo *)"
 if [ -e "${dir}" ]; then
 	mv "${dir}"/* .
 fi
+
+# Verify pre-requisites are met
+verifyRequiredPackages || die 'Required packages missing'
+verifyPrerequisites || die 'Prerequisities failed'
 
 # Start logging
 set -x
