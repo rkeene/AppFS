@@ -1,5 +1,8 @@
 #! /usr/bin/env bash
 
+TZ=UTC
+export TZ
+
 targetmode='install'
 if [ "$1" == '--cpio' ]; then
 	targetmode='archive'
