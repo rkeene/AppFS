@@ -1,9 +1,16 @@
 #! /usr/bin/env bash
 
+targetmode='install'
+if [ "$1" == '--cpio' ]; then
+	targetmode='archive'
+
+	shift
+fi
+
 pkg="$(echo "$1" | sed 's@/*$@@;s@^\.*/*@@')"
 
 if [ -z "${pkg}" ]; then
-	echo "Usage: build <package>" 2>&1
+	echo "Usage: build [--cpio] <package>" 2>&1
 
 	exit 1
 fi
@@ -59,7 +66,7 @@ function postbuild() {
 }
 
 function build() {
-	grep "DESTDIR" Makefile || die "Don't know how to build this software"
+	grep "DESTDIR" Makefile >/dev/null || die "Don't know how to build this software"
 
 	make
 }
@@ -96,7 +103,14 @@ function die() {
 	exit 1
 }
 
-cd "$(dirname "$(which "$0")")" || exit 1
+scriptdir="$(cd "$(dirname "$(which "$0")")" && pwd)"
+if [ -z "${scriptdir}" ]; then
+	echo "Unable to locate script directory" >&2
+
+	exit 1
+fi
+
+cd "${scriptdir}" || exit 1
 
 if [ -f 'build.conf' ]; then
 	. 'build.conf'
@@ -116,7 +130,7 @@ if [ ! -e "${pkgfile}" ]; then
 	exit 1
 fi
 
-pkgdate="$(for artifact in $(find "${pkgdir}" -type f -print0 | xargs -n 1 -0 fossil finfo --limit 1 --width 0 2>/dev/null | grep '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ' | sed 's@^[^ ]* \[@@;s@\].*@@' | sort -u); do fossil info "${artifact}" | awk '/^uuid:/{ print $3 "T" $4 }' | sed 's@[-:]@@g;s@..$@\.&@'; done | sort -n | tail -n 1)"
+pkgdate="$(for artifact in $(find "${pkgdir}" -type f -print0 | xargs -n 1 -0 fossil finfo --limit 1 --width 0 2>/dev/null | grep '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ' | sed 's@^[^ ]* \[@@;s@\].*@@' | sort -u); do fossil info "${artifact}" | awk '/^uuid:/{ print $3 $4 }' | sed 's@[-:]@@g;s@..$@\.&@'; done | sort -n | tail -n 1)"
 if [ -z "${pkgdate}" ]; then
 	pkgdate="$(find "${pkgdir}" -type f -printf '%TY%Tm%Td%TH%TM.%TS\n' 2>/dev/null | cut -f 1-2 -d '.' | sort -n | tail -n 1)"
 fi
@@ -212,13 +226,28 @@ install || die 'install failed'
 postinstall || die 'postinstall failed'
 
 (
-	appdir="$(appfsinstalldir)/${prefixsuffix}"
-	mkdir -p "${appdir}"
+	case "${targetmode}" in
+		install)
+			appdir="$(appfsinstalldir)/${prefixsuffix}"
+			mkdir -p "${appdir}"
 
-	cd "${destdir}/${prefix}" || exit 1
-	cp -rp * "${appdir}"
-	find "${appdir}" -print0 | xargs -0 touch -t "${pkgdate}"
-)
+			cd "${destdir}/${prefix}" || exit 1
+
+			cp -rp * "${appdir}"
+			find "${appdir}" -print0 | xargs -0 touch -t "${pkgdate}"
+			find "${appdir}" -print0 | xargs -0 touch -m -t "${pkgdate}"
+			find "${appdir}" -print0 | xargs -0 touch -a -t "${pkgdate}"
+			;;
+		archive)
+			archivefile="${scriptdir}/${pkg}-${version}-$(echo "${pkgdate}" | sed 's@\.@@g')-${domain}.cpio"
+			cd "${destdir}/${prefix}/../../.." || exit 1
+			find "${prefixsuffix}" -print0 | xargs -0 touch -t "${pkgdate}"
+			find "${prefixsuffix}" -print0 | xargs -0 touch -m -t "${pkgdate}"
+			find "${prefixsuffix}" -print0 | xargs -0 touch -a -t "${pkgdate}"
+			find "${prefixsuffix}" | sort | cpio --owner 0:0 -H newc -o > "${archivefile}"
+			;;
+	esac
+) || die 'final installation failed'
 
 cleanup
 
