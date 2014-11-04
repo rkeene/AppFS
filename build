@@ -1,5 +1,6 @@
 #! /usr/bin/env bash
 
+# Set timezone to default
 TZ=UTC
 export TZ
 
@@ -51,6 +52,10 @@ function configure() {
 	glibcvers=2.20
 	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/platform/${glibcvers}"
 	dynlinker="$(ls "${glibcdir}"/lib/ld-linux*.so.* | tail -n 1)"
+
+	if [ ! -d "${glibcdir}" ]; then
+		die 'glibc directory is not available (appfs running/working?)'
+	fi
 
 	CFLAGS="-I${glibcdir}/include"
 	CPPFLAGS="-I${glibcdir}/include"
