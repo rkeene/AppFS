@@ -131,7 +131,6 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 		return(NULL);
 	}
 
-	Tcl_HideCommand(interp, "package", "package");
 	Tcl_HideCommand(interp, "glob", "glob");
 	Tcl_HideCommand(interp, "exec", "exec");
 	Tcl_HideCommand(interp, "pid", "pid");
