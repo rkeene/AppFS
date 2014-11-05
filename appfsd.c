@@ -83,6 +83,8 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	Tcl_Interp *interp;
 	int tcl_ret;
 
+	APPFS_DEBUG("Creating new Tcl interpreter for TID = 0x%llx", (unsigned long long) pthread_self());
+
 	interp = Tcl_CreateInterp();
 	if (interp == NULL) {
 		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
@@ -94,6 +96,8 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
 
+		Tcl_DeleteInterp(interp);
+
 		return(NULL);
 	}
 
@@ -104,11 +108,15 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
+		Tcl_DeleteInterp(interp);
+
 		return(NULL);
 	}
 
 	if (Tcl_SetVar(interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
 		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
+
+		Tcl_DeleteInterp(interp);
 
 		return(NULL);
 	}
@@ -118,8 +126,17 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
+		Tcl_DeleteInterp(interp);
+
 		return(NULL);
 	}
+
+	Tcl_HideCommand(interp, "package", "package");
+	Tcl_HideCommand(interp, "glob", "glob");
+	Tcl_HideCommand(interp, "exec", "exec");
+	Tcl_HideCommand(interp, "pid", "pid");
+	Tcl_HideCommand(interp, "auto_load_index", "auto_load_index");
+	Tcl_HideCommand(interp, "unknown", "unknown");
 
 	return(interp);
 }
