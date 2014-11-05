@@ -34,36 +34,38 @@ namespace eval ::appfs {
 
 		file mkdir [file dirname $file]
 
-		if {![file exists $file]} {
-			set tmpfile "${file}.new"
+		if {[file exists $file]} {
+			return $file
+		}
 
-			set fd [open $tmpfile "w"]
-			fconfigure $fd -translation binary
+		set tmpfile "${file}.[expr {rand()}]"
 
-			catch {
-				set token [::http::geturl $url -channel $fd -binary true]
-			}
+		set fd [open $tmpfile "w"]
+		fconfigure $fd -translation binary
 
-			if {[info exists token]} {
-				set ncode [::http::ncode $token]
-				::http::reset $token
-			} else {
-				set ncode "900"
-			}
+		catch {
+			set token [::http::geturl $url -channel $fd -binary true]
+		}
 
-			close $fd
+		if {[info exists token]} {
+			set ncode [::http::ncode $token]
+			::http::reset $token
+		} else {
+			set ncode "900"
+		}
 
-			if {$keyIsHash} {
-				set hash [string tolower [sha1::sha1 -hex -file $tmpfile]]
-			} else {
-				set hash $key
-			}
+		close $fd
 
-			if {$ncode == "200" && $hash == $key} {
-				file rename -force -- $tmpfile $file
-			} else {
-				file delete -force -- $tmpfile
-			}
+		if {$keyIsHash} {
+			set hash [string tolower [sha1::sha1 -hex -file $tmpfile]]
+		} else {
+			set hash $key
+		}
+
+		if {$ncode == "200" && $hash == $key} {
+			file rename -force -- $tmpfile $file
+		} else {
+			file delete -force -- $tmpfile
 		}
 
 		return $file
