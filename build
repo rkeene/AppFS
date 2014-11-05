@@ -57,8 +57,9 @@ function verifyRequiredPackages() {
 
 			CFLAGS="${CFLAGS} -I${pkgdir}/include"
 			CPPFLAGS="${CPPFLAGS} -I${pkgdir}/include"
-			LDFLAGS="${LDFLAGS} -L${pkgdir}/lib"
-			export CFLAGS CPPFLAGS LDFLAGS
+			LDFLAGS="${LDFLAGS} -L${pkgdir}/lib -Wl,-rpath,${pkgdir}/lib"
+			PATH="${PATH}:${pkgdir}/bin"
+			export CFLAGS CPPFLAGS LDFLAGS PATH
 
 			if [ -d "${pkgconfigdir}" ]; then
 				PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:${pkgconfigdir}"
