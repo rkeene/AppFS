@@ -19,6 +19,64 @@ if [ -z "${pkg}" ]; then
 	exit 1
 fi
 
+function download() {
+	if [ ! -e "${pkgarchive}" ]; then
+		# Download
+		## Cleanup
+		rm -f src.new
+
+		## Fetch file
+		wget -O src.new "${url}" || exit 1
+
+		## Verify signature
+		src_sha256="$(openssl sha256 'src.new' | sed 's@^.*= @@')"
+		if [ "${src_sha256}" != "${sha256}" ]; then
+			echo "SHA256 mismatch:  Downloaded: ${src_sha256} != Expected: ${sha256}" >&2
+
+			exit 1
+		fi
+
+		## Move file into place
+		mv src.new "${pkgarchive}"
+	fi
+}
+
+function extract() {
+	local decompress
+
+	# Decompress archive
+	## Determine type of archive
+	case "${url}" in
+		*.tar.xz|*.tar.xz'?'*|*.txz)
+			decompress='xz'
+			;;
+		*.tar.gz|*.tar.gz'?'*|*.tgz)
+			decompress='gzip'
+			;;
+		*.tar.bz2|*.tar.bz2'?'*|*.tbz2)
+			decompress='bzip2'
+			;;
+		*.zip|*.zip'?'*)
+			decompress='unzip'
+			;;
+		*)
+			echo "Unknown compression method: ${url}" >&2
+
+			exit 1
+			;;
+	esac
+
+	## Do decompression
+	case "${decompress}" in
+		unzip)
+			unzip "${pkgarchive}" || die 'Unable to uncompress archive'
+			;;
+		*)
+			"${decompress}" -dc "${pkgarchive}" | tar -xf - || die 'Unable to uncompress archive'
+			;;
+	esac
+}
+
 function verifyRequiredPackages() {
 	local pkg pkgdomain pkgversion
 	local pkgdir pkgconfigdir pkgfound
@@ -122,7 +180,7 @@ function configure() {
 	PKG_CONFIG_LIBDIR="${glibcdir}/lib/pkgconfig"
 	export CFLAGS CPPFLAGS LDFLAGS PKG_CONFIG_LIBDIR
 
-	./configure --prefix="${prefix}" --sysconfdir=/etc --localstatedir=/var
+	./configure --prefix="${prefix}" --sysconfdir=/etc --localstatedir=/var "${configure_extra[@]}"
 }
 
 function prebuild() {
@@ -207,66 +265,17 @@ fi
 
 archivedir="$(pwd)/ARCHIVE"
 workdir="workdir-$$${RANDOM}${RANDOM}${RANDOM}"
-srcfile="${archivedir}/${pkg}"
+pkgarchive="${archivedir}/${pkg}-${version}"
 mkdir "${archivedir}" >/dev/null 2>/dev/null
 mkdir "${workdir}" || exit 1
 cd "${workdir}" || exit 1
 workdir="$(pwd)"
 
-if [ ! -e "${srcfile}" ]; then
-	# Download
-	## Cleanup
-	rm -f src.new src
+# Download
+download
 
-	## Fetch file
-	wget -O src.new "${url}" || exit 1
-
-	## Verify signature
-	src_sha256="$(openssl sha256 'src.new' | sed 's@^.*= @@')"
-	if [ "${src_sha256}" != "${sha256}" ]; then
-		echo "SHA256 mismatch:  Downloaded: ${src_sha256} != Expected: ${sha256}" >&2
-
-		exit 1
-	fi
-
-	## Move file into place
-	mv src.new "${archivedir}/${pkg}"
-fi
-
-# Decompress archive
-## Determine type of archive
-case "${url}" in
-	*.tar.xz|*.tar.xz'?'*|*.txz)
-		decompress='xz'
-		;;
-	*.tar.gz|*.tar.gz'?'*|*.tgz)
-		decompress='gzip'
-		;;
-	*.tar.bz2|*.tar.bz2'?'*|*.tbz2)
-		decompress='bzip2'
-		;;
-	*.zip|*.zip'?'*)
-		decompress='unzip'
-		;;
-	*)
-		echo "Unknown compression method: ${url}" >&2
-
-		exit 1
-		;;
-esac
-
-## Do decompression
-case "${decompress}" in
-	unzip)
-		unzip "${srcfile}" || die 'Unable to uncompress archive'
-		;;
-	*)
-		"${decompress}" -dc "${srcfile}" | tar -xf - || die 'Unable to uncompress archive'
-		;;
-esac
-
-## Cleanup source
-rm -f src
+# Extract
+extract
 
 # If we just have one directory, use that directory
 dir="$(echo *)"
