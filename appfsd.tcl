@@ -100,6 +100,9 @@ namespace eval ::appfs {
 			"sunos" {
 				return "solaris"
 			}
+			"noarch" - "none" - "any" - "all" {
+				return "noarch"
+			}
 		}
 
 		return -code error "Unable to normalize OS: $os"
@@ -114,6 +117,9 @@ namespace eval ::appfs {
 			}
 			"x86_64" {
 				return $cpu
+			}
+			"noarch" - "none" - "any" - "all" {
+				return "noarch"
 			}
 		}
 
@@ -219,13 +225,17 @@ namespace eval ::appfs {
 			set work [split $line ","]
 
 			unset -nocomplain pkgInfo
-			set pkgInfo(package)  [lindex $work 0]
-			set pkgInfo(version)  [lindex $work 1]
-			set pkgInfo(os)       [_normalizeOS [lindex $work 2]]
-			set pkgInfo(cpuArch)  [_normalizeCPU [lindex $work 3]]
-			set pkgInfo(hash)     [string tolower [lindex $work 4]]
-			set pkgInfo(hash_type) "sha1"
-			set pkgInfo(isLatest) [expr {!![lindex $work 5]}]
+			if {[catch {
+				set pkgInfo(package)  [lindex $work 0]
+				set pkgInfo(version)  [lindex $work 1]
+				set pkgInfo(os)       [_normalizeOS [lindex $work 2]]
+				set pkgInfo(cpuArch)  [_normalizeCPU [lindex $work 3]]
+				set pkgInfo(hash)     [string tolower [lindex $work 4]]
+				set pkgInfo(hash_type) "sha1"
+				set pkgInfo(isLatest) [expr {!![lindex $work 5]}]
+			}]} {
+				continue
+			}
 
 			if {![_isHash $pkgInfo(hash)]} {
 				continue
