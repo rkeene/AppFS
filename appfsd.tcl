@@ -155,7 +155,7 @@ namespace eval ::appfs {
 		set file [_cachefile $url $hash]
 
 		if {![file exists $file]} {
-			return -code error "Unable to fetch"
+			return -code error "Unable to fetch (file does not exist: $file)"
 		}
 
 		return $file
@@ -189,7 +189,7 @@ namespace eval ::appfs {
 				set indexhash_data [::http::data $token]
 			}
 			::http::reset $token
-			$token cleanup
+			::http::cleanup $token
 		}
 
 		if {![info exists indexhash_data]} {
