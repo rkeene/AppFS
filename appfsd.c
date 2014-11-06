@@ -1,7 +1,6 @@
 #define FUSE_USE_VERSION 26
 
 #include <sys/types.h>
-#include <sqlite3.h>
 #include <pthread.h>
 #include <string.h>
 #include <stdarg.h>
@@ -30,10 +29,8 @@ int Sha1_Init(Tcl_Interp *interp);
 static pthread_key_t interpKey;
 
 struct appfs_thread_data {
-	sqlite3 *db;
 	const char *cachedir;
 	time_t boottime;
-	const char *platform;
 	struct {
 		int writable;
 	} options;
@@ -77,12 +74,6 @@ struct appfs_pathinfo {
 	} typeinfo;
 };
 
-struct appfs_sqlite3_query_cb_handle {
-	struct appfs_children *head;
-	int argc;
-	const char *fmt;
-};
-
 static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	Tcl_Interp *interp;
 	int tcl_ret;
@@ -109,6 +100,16 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	tcl_ret = Tcl_Eval(interp, "package ifneeded sha1 1.0 [list load {} sha1]");
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl SHA1.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		Tcl_DeleteInterp(interp);
+
+		return(NULL);
+	}
+
+	tcl_ret = Tcl_Eval(interp, "package ifneeded appfsd 1.0 [list load {} appfsd]");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl AppFS Package.  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
 		Tcl_DeleteInterp(interp);
@@ -273,16 +274,6 @@ static void appfs_update_manifest(const char *hostname, const char *sha1) {
 	return;
 }
 
-#define appfs_free_list_type(id, type) static void appfs_free_list_ ## id(type *head) { \
-	type *obj, *next; \
-	for (obj = head; obj; obj = next) { \
-		next = obj->_next; \
-		ckfree((void *) obj); \
-	} \
-}
-
-appfs_free_list_type(children, struct appfs_children)
-
 static uid_t appfs_get_fsuid(void) {
 	struct fuse_context *ctx;
 
@@ -294,7 +285,7 @@ static uid_t appfs_get_fsuid(void) {
 	return(ctx->uid);
 }
 
-static const char *appfs_get_homedir(uid_t fsuid) {
+static char *appfs_get_homedir(uid_t fsuid) {
 	struct passwd entry, *result;
 	struct stat stbuf;
 	char buf[1024], *retval;
@@ -336,437 +327,39 @@ static const char *appfs_get_homedir(uid_t fsuid) {
 		return(NULL);
 	}
 
-	retval = sqlite3_mprintf("%s", result->pw_dir);
+	retval = strdup(result->pw_dir);
 
 	return(retval);
 }
 
-static int appfs_getpackage_name_cb(void *_package_name, int columns, char **values, char **names) {
-	char **package_name;
+static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	char *homedir;
 
-	if (columns != 1) {
-		return(1);
+        if (objc != 1) {
+                Tcl_WrongNumArgs(interp, 1, objv, NULL);
+                return(TCL_ERROR);
+        }
+
+	homedir = appfs_get_homedir(appfs_get_fsuid());
+
+	if (homedir == NULL) {
+		return(TCL_ERROR);
 	}
 
-	package_name = _package_name;
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(homedir, -1));
 
-	*package_name = sqlite3_mprintf("%s", values[0]);
+	free(homedir);
 
-	return(0);
-}
-
-static char *appfs_getpackage_name(const char *hostname, const char *package_hash) {
-	char *sql;
-	int sqlite_ret;
-	char *package_name = NULL;
-
-	sql = sqlite3_mprintf("SELECT package FROM packages WHERE hostname = %Q AND sha1 = %Q LIMIT 1;", hostname, package_hash);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		return(sqlite3_mprintf("%s", "unknown-package-name"));
-	}
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getpackage_name_cb, &package_name, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(sqlite3_mprintf("%s", "unknown-package-name"));
-	}
-
-	return(package_name);
-}
-
-static struct appfs_children *appfs_getchildren_fs(struct appfs_children *in_children, const char *fspath) {
-	APPFS_DEBUG("Searching %s", fspath);
-
-	return(in_children);
-}
-
-static int appfs_getchildren_cb(void *_head, int columns, char **values, char **names) {
-	struct appfs_children **head_p, *obj;
-
-	head_p = _head;
-
-	obj = (void *) ckalloc(sizeof(*obj));
-
-	snprintf(obj->name, sizeof(obj->name), "%s", values[0]);
-
-	if (*head_p == NULL) {
-		obj->counter = 0;
-	} else {
-		obj->counter = (*head_p)->counter + 1;
-	}
-
-	obj->_next = *head_p;
-	*head_p = obj;
-
-	return(0);
-	
+        return(TCL_OK);
 }
 
 static struct appfs_children *appfs_getchildren(const char *hostname, const char *package_hash, const char *path, int *children_count_p) {
-	struct appfs_children *head = NULL;
-	char *sql, *filebuf, *homedir = NULL;
-	int sqlite_ret;
-	uid_t fsuid;
-
-	if (children_count_p == NULL) {
-		return(NULL);
-	}
-
-	appfs_update_index(hostname);
-	appfs_update_manifest(hostname, package_hash);
-
-	sql = sqlite3_mprintf("SELECT file_name FROM files WHERE package_sha1 = %Q AND file_directory = %Q;", package_hash, path);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		return(NULL);
-	}
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getchildren_cb, &head, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		appfs_free_list_children(head);
-
-		return(NULL);
-	}
-
-	if (globalThread.options.writable) {
-		/* Determine user of process accessing this file */
-		fsuid = appfs_get_fsuid();
-
-		/* Check filesystem paths for updated files */
-		/** Check the global directory (/etc) **/
-		filebuf = sqlite3_mprintf("/etc/appfs/%z@%s/%s", appfs_getpackage_name(hostname, package_hash), hostname, path);
-		if (filebuf == NULL) {
-			APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-			return(NULL);
-		}
-
-		head = appfs_getchildren_fs(head, filebuf);
-
-		sqlite3_free(filebuf);
-
-		/** Check the user's directory, if we are not root **/
-		if (fsuid != 0) {
-			homedir = (char *) appfs_get_homedir(fsuid);
-		}
-
-		if (homedir != NULL) {
-			filebuf = sqlite3_mprintf("%z/.appfs/%z@%s/%s", homedir, appfs_getpackage_name(hostname, package_hash), hostname, path);
-
-			if (filebuf == NULL) {
-				APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-				return(NULL);
-			}
-
-			head = appfs_getchildren_fs(head, filebuf);
-
-			sqlite3_free(filebuf);
-		}
-	}
-
-	if (head != NULL) {
-		*children_count_p = head->counter + 1;
-	} else {
-		*children_count_p = 0;
-	}
-
-	return(head);
-}
-
-static int appfs_sqlite3_query_cb(void *_cb_handle, int columns, char **values, char **names) {
-	struct appfs_sqlite3_query_cb_handle *cb_handle;
-	struct appfs_children *obj;
-
-	cb_handle = _cb_handle;
-
-	obj = (void *) ckalloc(sizeof(*obj));
-
-	switch (cb_handle->argc) {
-		case 1:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0]);
-			break;
-		case 2:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0], values[1]);
-			break;
-		case 3:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0], values[1], values[2]);
-			break;
-		case 4:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0], values[1], values[2], values[3]);
-			break;
-	}
-
-	if (cb_handle->head == NULL) {
-		obj->counter = 0;
-	} else {
-		obj->counter = cb_handle->head->counter + 1;
-	}
-
-	obj->_next = cb_handle->head;
-	cb_handle->head = obj;
-
-	return(0);
-}
-
-static struct appfs_children *appfs_sqlite3_query(char *sql, int argc, const char *fmt, int *results_count_p) {
-	struct appfs_sqlite3_query_cb_handle cb_handle;
-	int sqlite_ret;
-
-	if (results_count_p == NULL) {
-		return(NULL);
-	}
-
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf probably failed.");
-
-		return(NULL);
-	}
-
-	if (fmt == NULL) {
-		fmt = "%s";
-	}
-
-	cb_handle.head = NULL;
-	cb_handle.argc = argc;
-	cb_handle.fmt  = fmt;
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_sqlite3_query_cb, &cb_handle, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(NULL);
-	}
-
-	if (cb_handle.head != NULL) {
-		*results_count_p = cb_handle.head->counter + 1;
-	}
-
-	return(cb_handle.head);
-}
-
-static int appfs_lookup_package_hash_cb(void *_retval, int columns, char **values, char **names) {
-	char **retval = _retval;
-
-	*retval = strdup(values[0]);
-
-	return(0);
 }
 
 static char *appfs_lookup_package_hash(const char *hostname, const char *package, const char *os, const char *cpuArch, const char *version) {
-	char *sql;
-	char *retval = NULL;
-	int sqlite_ret;
-
-	appfs_update_index(hostname);
-
-	sql = sqlite3_mprintf("SELECT sha1 FROM packages WHERE hostname = %Q AND package = %Q AND os = %Q AND cpuArch = %Q AND version = %Q;",
-		hostname,
-		package,
-		os,
-		cpuArch,
-		version
-	);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		return(NULL);
-	}
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_lookup_package_hash_cb, &retval, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(NULL);
-	}
-
-	return(retval);
-}
-
-static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, char **names) {
-	struct appfs_pathinfo *pathinfo = _pathinfo;
-	const char *type, *time, *source, *size, *perms, *sha1, *rowid;
-
-	type = values[0];
-	time = values[1];
-	source = values[2];
-	size = values[3];
-	perms = values[4];
-	sha1 = values[5];
-	rowid = values[6];
-
-	pathinfo->time = strtoull(time, NULL, 10);
-
-	/* Package file inodes start at 2^32, fake inodes are before then */
-	pathinfo->inode = strtoull(rowid, NULL, 10) + 4294967296ULL;
-
-	if (strcmp(type, "file") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_FILE;
-
-		if (!size) {
-			size = "0";
-		}
-
-		if (!perms) {
-			perms = "";
-		}
-
-		if (!sha1) {
-			sha1 = "";
-		}
-
-		pathinfo->typeinfo.file.size = strtoull(size, NULL, 10);
-		snprintf(pathinfo->typeinfo.file.sha1, sizeof(pathinfo->typeinfo.file.sha1), "%s", sha1);
-
-		if (strcmp(perms, "x") == 0) {
-			pathinfo->typeinfo.file.executable = 1;
-		} else {
-			pathinfo->typeinfo.file.executable = 0;
-		}
-
-		return(0);
-	}
-
-	if (strcmp(type, "directory") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-		pathinfo->typeinfo.dir.childcount = 0;
-
-		return(0);
-	}
-
-	if (strcmp(type, "symlink") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_SYMLINK;
-		pathinfo->typeinfo.dir.childcount = 0;
-
-		if (!source) {
-			source = ".BADLINK";
-		}
-
-		pathinfo->typeinfo.symlink.size = strlen(source);
-		snprintf(pathinfo->typeinfo.symlink.source, sizeof(pathinfo->typeinfo.symlink.source), "%s", source);
-
-		return(0);
-	}
-
-	return(0);
-
-	/* Until this is used, prevent the compiler from complaining */
-	source = source;
 }
 
 static int appfs_getfileinfo(const char *hostname, const char *package_hash, const char *_path, struct appfs_pathinfo *pathinfo) {
-	char *directory, *file, *path;
-	char *sql;
-	int sqlite_ret;
-
-	if (pathinfo == NULL) {
-		return(-EIO);
-	}
-
-	appfs_update_index(hostname);
-	appfs_update_manifest(hostname, package_hash);
-
-	path = strdup(_path);
-	directory = path;
-	file = strrchr(path, '/');
-	if (file == NULL) {
-		file = path;
-		directory = "";
-	} else {
-		*file = '\0';
-		file++;
-	}
-
-	sql = sqlite3_mprintf("SELECT type, time, source, size, perms, file_sha1, rowid FROM files WHERE package_sha1 = %Q AND file_directory = %Q AND file_name = %Q;", package_hash, directory, file);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		free(path);
-
-		return(-EIO);
-	}
-
-	free(path);
-
-	pathinfo->type = APPFS_PATHTYPE_INVALID;
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getfileinfo_cb, pathinfo, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(-EIO);
-	}
-
-	if (pathinfo->type == APPFS_PATHTYPE_INVALID) {
-		return(-ENOENT);
-	}
-
-	return(0);
-}
-
-static int appfs_get_path_info_sql(char *sql, int argc, const char *fmt, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
-	struct appfs_children *node, *dir_children, *dir_child;
-	int dir_children_count = 0;
-
-	dir_children = appfs_sqlite3_query(sql, argc, fmt, &dir_children_count);
-
-	if (dir_children == NULL || dir_children_count == 0) {
-		return(-ENOENT);
-	}
-
-	/* Request for a single hostname */
-	pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-	pathinfo->typeinfo.dir.childcount = dir_children_count;
-	pathinfo->time = globalThread.boottime;
-
-	if (children) {
-		for (dir_child = dir_children; dir_child; dir_child = dir_child->_next) {
-			node = (void *) ckalloc(sizeof(*node));
-			node->_next = *children;
-			strcpy(node->name, dir_child->name);
-			*children = node;
-		}
-	}
-
-	appfs_free_list_children(dir_children);
-
-	return(0);
-}
-
-static int appfs_add_path_child(const char *name, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
-	struct appfs_children *new_child;
-
-	pathinfo->typeinfo.dir.childcount++;
-
-	if (children) {
-		new_child = (void *) ckalloc(sizeof(*new_child));
-		new_child->_next = *children;
-
-		snprintf(new_child->name, sizeof(new_child->name), "%s", name);
-
-		*children = new_child;
-	}
-
-	return(0);
 }
 
 /* Generate an inode for a given path */
@@ -790,222 +383,6 @@ static long long appfs_get_path_inode(const char *path) {
 
 /* Get information about a path, and optionally list children */
 static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
-	struct appfs_children *dir_children;
-	char *hostname, *packagename, *os_cpuArch, *os, *cpuArch, *version;
-	char *path, *path_s;
-	char *package_hash;
-	char *sql;
-	int files_count;
-	int fileinfo_ret, retval;
-
-	/* Initialize return */
-	if (children) {
-		*children = NULL;
-	}
-
-	/* Verify that this is a valid request */
-	if (_path == NULL) {
-		return(-ENOENT);
-	}
-
-	if (_path[0] != '/') {
-		return(-ENOENT);
-	}
-
-	/* Note that this is not a "real" directory from a package */
-	pathinfo->packaged = 0;
-
-	if (_path[1] == '\0') {
-		/* Request for the root directory */
-		pathinfo->hostname[0] = '\0';
-		pathinfo->inode = 1;
-
-		sql = sqlite3_mprintf("SELECT DISTINCT hostname FROM packages;");
-
-		retval = appfs_get_path_info_sql(sql, 1, NULL, pathinfo, children);
-
-		/* The root directory always exists, even if it has no subordinates */
-		if (retval != 0) {
-			pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-			pathinfo->typeinfo.dir.childcount = 0;
-			pathinfo->time = globalThread.boottime;
-
-			retval = 0;
-		}
-
-		return(retval);
-	}
-
-	path = strdup(_path);
-	path_s = path;
-
-	pathinfo->inode = appfs_get_path_inode(path);
-
-	hostname = path + 1;
-	packagename = strchr(hostname, '/');
-
-	if (packagename != NULL) {
-		*packagename = '\0';
-		packagename++;
-	}
-
-	snprintf(pathinfo->hostname, sizeof(pathinfo->hostname), "%s", hostname);
-
-	if (packagename == NULL) {
-		appfs_update_index(hostname);
-
-		sql = sqlite3_mprintf("SELECT DISTINCT package FROM packages WHERE hostname = %Q;", hostname);
-
-		free(path_s);
-
-		return(appfs_get_path_info_sql(sql, 1, NULL, pathinfo, children));
-	}
-
-	os_cpuArch = strchr(packagename, '/');
-
-	if (os_cpuArch != NULL) {
-		*os_cpuArch = '\0';
-		os_cpuArch++;
-	}
-
-	if (os_cpuArch == NULL) {
-		appfs_update_index(hostname);
-
-		sql = sqlite3_mprintf("SELECT DISTINCT os, cpuArch FROM packages WHERE hostname = %Q AND package = %Q;", hostname, packagename);
-
-		free(path_s);
-
-		retval = appfs_get_path_info_sql(sql, 2, "%s-%s", pathinfo, children);
-
-		if (retval != 0) {
-			return(retval);
-		}
-
-		appfs_add_path_child("platform", pathinfo, children);
-
-		return(retval);
-	}
-
-	version = strchr(os_cpuArch, '/');
-
-	if (version != NULL) {
-		*version = '\0';
-		version++;
-	}
-
-	os = os_cpuArch;
-	cpuArch = strchr(os_cpuArch, '-');
-	if (cpuArch) {
-		*cpuArch = '\0';
-		cpuArch++;
-	} else {
-		cpuArch = "";
-	}
-
-	if (version == NULL) {
-		if (strcmp(os, "platform") == 0 && strcmp(cpuArch, "") == 0) {
-			pathinfo->type = APPFS_PATHTYPE_SYMLINK;
-			pathinfo->time = globalThread.boottime;
-			pathinfo->typeinfo.dir.childcount = 0;
-			pathinfo->typeinfo.symlink.size = strlen(globalThread.platform);
-
-			snprintf(pathinfo->typeinfo.symlink.source, sizeof(pathinfo->typeinfo.symlink.source), "%s", globalThread.platform);
-
-			free(path_s);
-
-			return(0);
-		}
-
-		/* Request for version list for a package on an OS/CPU */
-		appfs_update_index(hostname);
-
-		sql = sqlite3_mprintf("SELECT DISTINCT version FROM packages WHERE hostname = %Q AND package = %Q AND os = %Q and cpuArch = %Q;", hostname, packagename, os, cpuArch);
-
-		free(path_s);
-
-		return(appfs_get_path_info_sql(sql, 1, NULL, pathinfo, children));
-	}
-
-	path = strchr(version, '/');
-	if (path == NULL) {
-		path = "";
-	} else {
-		*path = '\0';
-		path++;
-	}
-
-	/* Request for a file in a specific package */
-	pathinfo->packaged = 1;
-	APPFS_DEBUG("Requesting information for hostname = %s, package = %s, os = %s, cpuArch = %s, version = %s, path = %s", 
-		hostname, packagename, os, cpuArch, version, path
-	);
-
-	package_hash = appfs_lookup_package_hash(hostname, packagename, os, cpuArch, version);
-	if (package_hash == NULL) {
-		free(path_s);
-
-		return(-ENOENT);
-	}
-
-	APPFS_DEBUG("  ... which hash a hash of %s", package_hash);
-
-	appfs_update_manifest(hostname, package_hash);
-
-	if (strcmp(path, "") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-		pathinfo->time = globalThread.boottime;
-	} else {
-		fileinfo_ret = appfs_getfileinfo(hostname, package_hash, path, pathinfo);
-		if (fileinfo_ret != 0) {
-			free(path_s);
-
-			return(fileinfo_ret);
-		}
-	}
-
-	if (pathinfo->type == APPFS_PATHTYPE_DIRECTORY) {
-		dir_children = appfs_getchildren(hostname, package_hash, path, &files_count);
-
-		if (dir_children != NULL) {
-			pathinfo->typeinfo.dir.childcount = files_count;
-		}
-
-		if (children) {
-			*children = dir_children;
-		} else {
-			appfs_free_list_children(dir_children);
-		}
-	}
-
-	free(path_s);
-
-	return(0);
-}
-
-static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
-	struct appfs_pathinfo pathinfo;
-	int res = 0;
-
-	APPFS_DEBUG("Enter (path = %s, ...)", path);
-
-	pathinfo.type = APPFS_PATHTYPE_INVALID;
-
-	res = appfs_get_path_info(path, &pathinfo, NULL);
-	if (res != 0) {
-		return(res);
-	}
-
-	if (pathinfo.type != APPFS_PATHTYPE_SYMLINK) {
-		return(-EINVAL);
-	}
-
-	if ((strlen(pathinfo.typeinfo.symlink.source) + 1) > size) {
-		return(-ENAMETOOLONG);
-	}
-
-	memcpy(buf, pathinfo.typeinfo.symlink.source, strlen(pathinfo.typeinfo.symlink.source) + 1);
-
-	return(0);
 }
 
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
@@ -1161,17 +538,31 @@ static struct fuse_operations appfs_oper = {
 	.read      = appfs_fuse_read
 };
 
+int Appfsd_Init(Tcl_Interp *interp) {
+#ifdef USE_TCL_STUBS
+	if (Tcl_InitStubs(interp, TCL_VERSION, 0) == 0L) {
+		return(TCL_ERROR);
+	}
+#endif
+
+	Tcl_CreateObjCommand(interp, "appfsd::get_homedir", tcl_appfs_get_homedir, NULL, NULL);
+
+	Tcl_PkgProvide(interp, "appfsd", "1.0");
+
+	return(TCL_OK);
+}
+
 int main(int argc, char **argv) {
 	const char *cachedir = APPFS_CACHEDIR;
 	char dbfilename[1024];
-	int pthread_ret, snprintf_ret, sqlite_ret;
+	int pthread_ret, snprintf_ret;
 
 	globalThread.cachedir = cachedir;
 	globalThread.boottime = time(NULL);
-	globalThread.platform = "linux-x86_64";
 	globalThread.options.writable = 1;
 
 	Tcl_StaticPackage(NULL, "sha1", Sha1_Init, NULL);
+	Tcl_StaticPackage(NULL, "appfsd", Appfsd_Init, NULL);
 
 	pthread_ret = pthread_key_create(&interpKey, NULL);
 	if (pthread_ret != 0) {
@@ -1183,13 +574,6 @@ int main(int argc, char **argv) {
 	snprintf_ret = snprintf(dbfilename, sizeof(dbfilename), "%s/%s", cachedir, "cache.db");
 	if (snprintf_ret >= sizeof(dbfilename)) {
 		fprintf(stderr, "Unable to set database filename.  Aborting.\n");
-
-		return(1);
-	}
-
-	sqlite_ret = sqlite3_open(dbfilename, &globalThread.db);
-	if (sqlite_ret != SQLITE_OK) {
-		fprintf(stderr, "Unable to open database: %s\n", dbfilename);
 
 		return(1);
 	}
