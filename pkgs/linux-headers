@@ -1,10 +1,9 @@
 #! /usr/bin/env bash
 
-version='2.6.32.63'
-url="https://www.kernel.org/pub/linux/kernel/v2.6/longterm/v2.6.32/linux-${version}.tar.xz"
+version='3.17.2'
+url="https://www.kernel.org/pub/linux/kernel/v3.x/linux-${version}.tar.xz"
 domain=core.appfs.rkeene.org
-sha256='2a3fa8fff01021341a1b7932e0a4c28ba39674833d679ab4e07c17b2b8c042af'
-
+sha256='f9221dc0878955318ab57b8bb5ea1f26cbbaa39359c91d0f6c8de74d68aea796'
 
 function configure() {
 	:
