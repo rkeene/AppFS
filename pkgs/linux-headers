@@ -1,0 +1,19 @@
+#! /usr/bin/env bash
+
+version='2.6.32.63'
+url="https://www.kernel.org/pub/linux/kernel/v2.6/longterm/v2.6.32/linux-${version}.tar.xz"
+domain=core.appfs.rkeene.org
+sha256='2a3fa8fff01021341a1b7932e0a4c28ba39674833d679ab4e07c17b2b8c042af'
+
+
+function configure() {
+	:
+}
+
+function build() {
+	make defconfig || die
+}
+
+function install() {
+	make INSTALL_HDR_PATH="${destdir}/${prefix}/include" headers_install || die
+}
