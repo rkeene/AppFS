@@ -14,5 +14,5 @@ function build() {
 }
 
 function install() {
-	make INSTALL_HDR_PATH="${destdir}/${prefix}/include" headers_install || die
+	make INSTALL_HDR_PATH="${destdir}/${prefix}" headers_install || die
 }
