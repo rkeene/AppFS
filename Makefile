@@ -24,15 +24,18 @@ TCL_LIBS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_LIB_SPEC}")
 
 all: appfsd
 
-appfsd: appfsd.o
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o appfsd appfsd.o $(LIBS)
+appfsd: appfsd.o sha1.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o appfsd appfsd.o sha1.o $(LIBS)
 
 appfsd.o: appfsd.c appfsd.tcl.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o appfsd.o -c appfsd.c
 
-appfsd.tcl.h: appfsd.tcl sha1.tcl
-	sed '/@@SHA1\.TCL@@/ r sha1.tcl' appfsd.tcl | sed '/@@SHA1\.TCL@@/ d' | sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' > appfsd.tcl.h.new
-	mv appfsd.tcl.h.new appfsd.tcl.h
+sha1.o: sha1.c sha1.tcl.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o sha1.o -c sha1.c
+
+%.tcl.h: %.tcl
+	sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' $^ > $@.new
+	mv $@.new $@
 
 install: appfsd
 	if [ ! -d '$(DESTDIR)$(sbindir)' ]; then mkdir -p '$(DESTDIR)$(sbindir)'; chmod 755 '$(DESTDIR)$(sbindir)'; fi
@@ -41,6 +44,7 @@ install: appfsd
 clean:
 	rm -f appfsd appfsd.o
 	rm -f appfsd.tcl.h
+	rm -f sha1.o sha1.tcl.h
 
 distclean: clean
 
