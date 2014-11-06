@@ -65,7 +65,6 @@ struct appfs_pathinfo {
 		struct {
 			int executable;
 			off_t size;
-			char sha1[41];
 		} file;
 		struct {
 			off_t size;
