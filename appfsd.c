@@ -269,28 +269,6 @@ static void appfs_update_manifest(const char *hostname, const char *sha1) {
 
 appfs_free_list_type(children, struct appfs_children)
 
-static int appfs_getchildren_cb(void *_head, int columns, char **values, char **names) {
-	struct appfs_children **head_p, *obj;
-
-	head_p = _head;
-
-	obj = (void *) ckalloc(sizeof(*obj));
-
-	snprintf(obj->name, sizeof(obj->name), "%s", values[0]);
-
-	if (*head_p == NULL) {
-		obj->counter = 0;
-	} else {
-		obj->counter = (*head_p)->counter + 1;
-	}
-
-	obj->_next = *head_p;
-	*head_p = obj;
-
-	return(0);
-	
-}
-
 static uid_t appfs_get_fsuid(void) {
 	struct fuse_context *ctx;
 
@@ -349,10 +327,69 @@ static const char *appfs_get_homedir(uid_t fsuid) {
 	return(retval);
 }
 
+static int appfs_getpackage_name_cb(void *_package_name, int columns, char **values, char **names) {
+	char **package_name;
+
+	if (columns != 1) {
+		return(1);
+	}
+
+	package_name = _package_name;
+
+	*package_name = sqlite3_mprintf("%s", values[0]);
+
+	return(0);
+}
+
+static char *appfs_getpackage_name(const char *hostname, const char *package_hash) {
+	char *sql;
+	int sqlite_ret;
+	char *package_name = NULL;
+
+	sql = sqlite3_mprintf("SELECT package FROM packages WHERE hostname = %Q AND sha1 = %Q LIMIT 1;", hostname, package_hash);
+	if (sql == NULL) {
+		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
+
+		return(sqlite3_mprintf("%s", "unknown-package-name"));
+	}
+	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getpackage_name_cb, &package_name, NULL);
+	sqlite3_free(sql);
+
+	if (sqlite_ret != SQLITE_OK) {
+		APPFS_DEBUG("Call to sqlite3_exec failed.");
+
+		return(sqlite3_mprintf("%s", "unknown-package-name"));
+	}
+
+	return(package_name);
+}
+
 static struct appfs_children *appfs_getchildren_fs(struct appfs_children *in_children, const char *fspath) {
 	APPFS_DEBUG("Searching %s", fspath);
 
 	return(in_children);
+}
+
+static int appfs_getchildren_cb(void *_head, int columns, char **values, char **names) {
+	struct appfs_children **head_p, *obj;
+
+	head_p = _head;
+
+	obj = (void *) ckalloc(sizeof(*obj));
+
+	snprintf(obj->name, sizeof(obj->name), "%s", values[0]);
+
+	if (*head_p == NULL) {
+		obj->counter = 0;
+	} else {
+		obj->counter = (*head_p)->counter + 1;
+	}
+
+	obj->_next = *head_p;
+	*head_p = obj;
+
+	return(0);
+	
 }
 
 static struct appfs_children *appfs_getchildren(const char *hostname, const char *package_hash, const char *path, int *children_count_p) {
@@ -393,7 +430,7 @@ static struct appfs_children *appfs_getchildren(const char *hostname, const char
 
 		/* Check filesystem paths for updated files */
 		/** Check the global directory (/etc) **/
-		filebuf = sqlite3_mprintf("/etc/appfs/%s/%s", package_hash, path);
+		filebuf = sqlite3_mprintf("/etc/appfs/%z@%s/%s", appfs_getpackage_name(hostname, package_hash), hostname, path);
 		if (filebuf == NULL) {
 			APPFS_DEBUG("Call to sqlite3_mprintf failed.");
 
@@ -410,7 +447,7 @@ static struct appfs_children *appfs_getchildren(const char *hostname, const char
 		}
 
 		if (homedir != NULL) {
-			filebuf = sqlite3_mprintf("%z/.appfs/%s/%s", homedir, package_hash, path);
+			filebuf = sqlite3_mprintf("%z/.appfs/%z@%s/%s", homedir, appfs_getpackage_name(hostname, package_hash), hostname, path);
 
 			if (filebuf == NULL) {
 				APPFS_DEBUG("Call to sqlite3_mprintf failed.");
