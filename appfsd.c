@@ -56,6 +56,7 @@ struct appfs_pathinfo {
 	appfs_pathtype_t type;
 	time_t time;
 	char hostname[256];
+	int packaged;
 	unsigned long long inode;
 	union {
 		struct {
@@ -746,10 +747,12 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	int files_count;
 	int fileinfo_ret, retval;
 
+	/* Initialize return */
 	if (children) {
 		*children = NULL;
 	}
 
+	/* Verify that this is a valid request */
 	if (_path == NULL) {
 		return(-ENOENT);
 	}
@@ -757,6 +760,9 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	if (_path[0] != '/') {
 		return(-ENOENT);
 	}
+
+	/* Note that this is not a "real" directory from a package */
+	pathinfo->packaged = 0;
 
 	if (_path[1] == '\0') {
 		/* Request for the root directory */
@@ -878,6 +884,7 @@ static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinf
 	}
 
 	/* Request for a file in a specific package */
+	pathinfo->packaged = 1;
 	APPFS_DEBUG("Requesting information for hostname = %s, package = %s, os = %s, cpuArch = %s, version = %s, path = %s", 
 		hostname, packagename, os, cpuArch, version, path
 	);
@@ -997,8 +1004,10 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			break;
 	}
 
-	if (globalThread.options.writable) {
-		stbuf->st_mode |= 0222;
+	if (pathinfo.packaged) {
+		if (globalThread.options.writable) {
+			stbuf->st_mode |= 0222;
+		}
 	}
 
 	return res;
