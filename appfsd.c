@@ -14,6 +14,9 @@
 #include <pwd.h>
 #include <tcl.h>
 
+/* From sha1.c */
+int Sha1_Init(Tcl_Interp *interp);
+
 #ifndef APPFS_CACHEDIR
 #define APPFS_CACHEDIR "/var/cache/appfs"
 #endif
@@ -95,6 +98,17 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	tcl_ret = Tcl_Init(interp);
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		Tcl_DeleteInterp(interp);
+
+		return(NULL);
+	}
+
+	tcl_ret = Tcl_Eval(interp, "package ifneeded sha1 1.0 [list load {} sha1]");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl SHA1.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
 		Tcl_DeleteInterp(interp);
 
@@ -1110,6 +1124,8 @@ int main(int argc, char **argv) {
 	globalThread.boottime = time(NULL);
 	globalThread.platform = "linux-x86_64";
 	globalThread.options.writable = 1;
+
+	Tcl_StaticPackage(NULL, "sha1", Sha1_Init, NULL);
 
 	pthread_ret = pthread_key_create(&interpKey, NULL);
 	if (pthread_ret != 0) {

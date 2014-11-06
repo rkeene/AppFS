@@ -2,13 +2,7 @@
 
 package require http 2.7
 package require sqlite3
-
-if {[catch {
-	package require sha1
-}]} {
-	@@SHA1.TCL@@
-	package require sha1
-}
+package require sha1
 
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"

@@ -1,8 +1,19 @@
-/* This code is public-domain - it is based on libcrypt
- * placed in the public domain by Wei Dai and other contributors.
- */
-/* http://oauth.googlecode.com/svn/code/c/liboauth/src/sha1.c */
+/*
+	SHA-1 in C
+	By Steve Reid <steve@edmweb.com>
+	100% Public Domain
 
+Test Vectors (from FIPS PUB 180-1)
+"abc"
+  A9993E36 4706816A BA3E2571 7850C26C 9CD0D89D
+"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+  84983E44 1C3BD26E BAAE4AA1 F95129E5 E54670F1
+A million repetitions of "a"
+  34AA973C D4C4DAA4 F61EEB2B DBAD2731 6534016F
+*/
+
+/* #define LITTLE_ENDIAN * This should be #define'd if true. */
+/* #define SHA1HANDSOFF * Copies data before messing with it. */
 #include <tcl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -10,228 +21,198 @@
 #include <stdint.h>
 #include <string.h>
 #include <fcntl.h>
+#include <stdio.h>
 
-#ifdef __BIG_ENDIAN__
-#	define SHA_BIG_ENDIAN
-#elif defined __LITTLE_ENDIAN__
-#elif defined __BYTE_ORDER
-# if __BYTE_ORDER__ ==  __ORDER_BIG_ENDIAN__
-# define SHA_BIG_ENDIAN
-# endif
-#else /* ! defined __LITTLE_ENDIAN__ */
-# include <endian.h> /* machine/endian.h */
-# if __BYTE_ORDER__ ==  __ORDER_BIG_ENDIAN__
-#  define SHA_BIG_ENDIAN
-# endif
+#define SHA1HANDSOFF 1
+
+typedef struct {
+	uint32_t state[5];
+	uint32_t count[2];
+	uint8_t  buffer[64];
+} SHA1_CTX;
+
+#ifndef __BIG_ENDIAN
+#define __BIG_ENDIAN 4321
+#endif
+#ifndef __LITTLE_ENDIAN
+#define __LITTLE_ENDIAN 1234
 #endif
 
-/* header */
-#define HASH_LENGTH 20
-#define BLOCK_LENGTH 64
-
-typedef struct sha1info {
-	uint32_t buffer[BLOCK_LENGTH / 4];
-	uint32_t state[HASH_LENGTH / 4];
-	uint32_t byteCount;
-	uint8_t bufferOffset;
-	uint8_t keyBuffer[BLOCK_LENGTH];
-	uint8_t innerHash[HASH_LENGTH];
-} sha1info;
-
-/* public API - prototypes - TODO: doxygen*/
-
-/**
- */
-static void sha1_init(sha1info *s);
-/**
- */
-static void sha1_writebyte(sha1info *s, uint8_t data);
-/**
- */
-static void sha1_write(sha1info *s, const char *data, size_t len);
-/**
- */
-static uint8_t *sha1_result(sha1info *s);
-/**
- */
-static void sha1_initHmac(sha1info *s, const uint8_t *key, int keyLength);
-/**
- */
-static uint8_t *sha1_resultHmac(sha1info *s);
-
-/* code */
-#define SHA1_K0  0x5a827999
-#define SHA1_K20 0x6ed9eba1
-#define SHA1_K40 0x8f1bbcdc
-#define SHA1_K60 0xca62c1d6
-
-static void sha1_init(sha1info *s) {
-	s->state[0] = 0x67452301;
-	s->state[1] = 0xefcdab89;
-	s->state[2] = 0x98badcfe;
-	s->state[3] = 0x10325476;
-	s->state[4] = 0xc3d2e1f0;
-	s->byteCount = 0;
-	s->bufferOffset = 0;
-}
-
-static uint32_t sha1_rol32(uint32_t number, uint8_t bits) {
-	return ((number << bits) | (number >> (32 - bits)));
-}
-
-static void sha1_hashBlock(sha1info *s) {
-	uint8_t i;
-	uint32_t a, b, c, d, e, t;
-
-	a = s->state[0];
-	b = s->state[1];
-	c = s->state[2];
-	d = s->state[3];
-	e = s->state[4];
-	for (i = 0; i < 80; i++) {
-		if (i >= 16) {
-			t = s->buffer[(i + 13) & 15] ^ s->buffer[(i + 8) & 15] ^ s->buffer[(i + 2) & 15] ^ s->buffer[i & 15];
-			s->buffer[i & 15] = sha1_rol32(t, 1);
-		}
-		if (i < 20) {
-			t = (d ^ (b & (c ^ d))) + SHA1_K0;
-		} else if (i < 40) {
-			t = (b ^ c ^ d) + SHA1_K20;
-		} else if (i < 60) {
-			t = ((b & c) | (d & (b | c))) + SHA1_K40;
-		} else {
-			t = (b ^ c ^ d) + SHA1_K60;
-		}
-		t += sha1_rol32(a, 5) + e + s->buffer[i & 15];
-		e = d;
-		d = c;
-		c = sha1_rol32(b, 30);
-		b = a;
-		a = t;
-	}
-	s->state[0] += a;
-	s->state[1] += b;
-	s->state[2] += c;
-	s->state[3] += d;
-	s->state[4] += e;
-}
-
-static void sha1_addUncounted(sha1info *s, uint8_t data) {
-	uint8_t * const b = (uint8_t *) s->buffer;
-#ifdef SHA_BIG_ENDIAN
-	b[s->bufferOffset] = data;
+#ifndef __BYTE_ORDER
+#ifdef WORDS_BIGENDIAN
+#define __BYTE_ORDER __BIG_ENDIAN
 #else
-	b[s->bufferOffset ^ 3] = data;
+#define __BYTE_ORDER __LITTLE_ENDIAN
 #endif
-	s->bufferOffset++;
-	if (s->bufferOffset == BLOCK_LENGTH) {
-		sha1_hashBlock(s);
-		s->bufferOffset = 0;
-	}
-}
-
-static void sha1_writebyte(sha1info *s, uint8_t data) {
-	++s->byteCount;
-	sha1_addUncounted(s, data);
-}
-
-static void sha1_write(sha1info *s, const char *data, size_t len) {
-	for (; len--; ) {
-		sha1_writebyte(s, (uint8_t) *data++);
-	}
-}
-
-static void sha1_pad(sha1info *s) {
-	/* Implement SHA-1 padding (fips180-2 §5.1.1) */
-
-	/* Pad with 0x80 followed by 0x00 until the end of the block */
-	sha1_addUncounted(s, 0x80);
-	while (s->bufferOffset != 56) {
-		sha1_addUncounted(s, 0x00);
-	}
-
-	/* Append length in the last 8 bytes */
-	sha1_addUncounted(s, 0); /* We're only using 32 bit lengths */
-	sha1_addUncounted(s, 0); /* But SHA-1 supports 64 bit lengths */
-	sha1_addUncounted(s, 0); /* So zero pad the top bits */
-	sha1_addUncounted(s, s->byteCount >> 29); /* Shifting to multiply by 8 */
-	sha1_addUncounted(s, s->byteCount >> 21); /* as SHA-1 supports bitstreams as well as */
-	sha1_addUncounted(s, s->byteCount >> 13); /* byte. */
-	sha1_addUncounted(s, s->byteCount >> 5);
-	sha1_addUncounted(s, s->byteCount << 3);
-}
-
-static uint8_t *sha1_result(sha1info *s) {
-	int i;
-
-	/* Pad to complete the last block */
-	sha1_pad(s);
-
-#ifndef SHA_BIG_ENDIAN
-	/* Swap byte order back */
-	for (i = 0; i < 5; i++) {
-		s->state[i]=
-			  (((s->state[i]) << 24) & 0xff000000)
-			| (((s->state[i]) <<  8) & 0x00ff0000)
-			| (((s->state[i]) >>  8) & 0x0000ff00)
-			| (((s->state[i]) >> 24) & 0x000000ff);
-	}
 #endif
-	/* Return pointer to hash (20 characters) */
-	return((uint8_t *) s->state);
+
+#if __BYTE_ORDER == __BIG_ENDIAN
+#ifndef BIG_ENDIAN
+#define BIG_ENDIAN 1
+#endif
+#undef LITTLE_ENDIAN
+#else
+#ifndef LITTLE_ENDIAN
+#define LITTLE_ENDIAN 1
+#endif
+#undef BIG_ENDIAN
+#endif
+
+#define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
+
+/* blk0() and blk() perform the initial expand. */
+/* I got the idea of expanding during the round function from SSLeay */
+#ifdef LITTLE_ENDIAN
+#define blk0(i) (block->l[i] = (rol(block->l[i],24)&0xFF00FF00) \
+    |(rol(block->l[i],8)&0x00FF00FF))
+#else
+#define blk0(i) block->l[i]
+#endif
+#define blk(i) (block->l[i&15] = rol(block->l[(i+13)&15]^block->l[(i+8)&15] \
+    ^block->l[(i+2)&15]^block->l[i&15],1))
+
+/* (R0+R1), R2, R3, R4 are the different operations used in SHA1 */
+#define R0(v,w,x,y,z,i) z+=((w&(x^y))^y)+blk0(i)+0x5A827999+rol(v,5);w=rol(w,30);
+#define R1(v,w,x,y,z,i) z+=((w&(x^y))^y)+blk(i)+0x5A827999+rol(v,5);w=rol(w,30);
+#define R2(v,w,x,y,z,i) z+=(w^x^y)+blk(i)+0x6ED9EBA1+rol(v,5);w=rol(w,30);
+#define R3(v,w,x,y,z,i) z+=(((w|x)&y)|(w&x))+blk(i)+0x8F1BBCDC+rol(v,5);w=rol(w,30);
+#define R4(v,w,x,y,z,i) z+=(w^x^y)+blk(i)+0xCA62C1D6+rol(v,5);w=rol(w,30);
+
+
+/* Hash a single 512-bit block. This is the core of the algorithm. */
+
+static void SHA1Transform(uint32_t state[5], uint8_t buffer[64]) {
+	uint32_t a, b, c, d, e;
+	typedef union {
+		uint8_t  c[64];
+		uint32_t l[16];
+	} CHAR64LONG16;
+	CHAR64LONG16* block;
+#ifdef SHA1HANDSOFF
+	uint8_t workspace[sizeof(*block)];
+
+	block = (CHAR64LONG16*)workspace;
+	memcpy(block, buffer, sizeof(*block));
+#else
+	block = (CHAR64LONG16*)buffer;
+#endif
+
+	/* Copy context->state[] to working vars */
+	a = state[0];
+	b = state[1];
+	c = state[2];
+	d = state[3];
+	e = state[4];
+
+	/* 4 rounds of 20 operations each. Loop unrolled. */
+	R0(a,b,c,d,e, 0); R0(e,a,b,c,d, 1); R0(d,e,a,b,c, 2); R0(c,d,e,a,b, 3);
+	R0(b,c,d,e,a, 4); R0(a,b,c,d,e, 5); R0(e,a,b,c,d, 6); R0(d,e,a,b,c, 7);
+	R0(c,d,e,a,b, 8); R0(b,c,d,e,a, 9); R0(a,b,c,d,e,10); R0(e,a,b,c,d,11);
+	R0(d,e,a,b,c,12); R0(c,d,e,a,b,13); R0(b,c,d,e,a,14); R0(a,b,c,d,e,15);
+	R1(e,a,b,c,d,16); R1(d,e,a,b,c,17); R1(c,d,e,a,b,18); R1(b,c,d,e,a,19);
+	R2(a,b,c,d,e,20); R2(e,a,b,c,d,21); R2(d,e,a,b,c,22); R2(c,d,e,a,b,23);
+	R2(b,c,d,e,a,24); R2(a,b,c,d,e,25); R2(e,a,b,c,d,26); R2(d,e,a,b,c,27);
+	R2(c,d,e,a,b,28); R2(b,c,d,e,a,29); R2(a,b,c,d,e,30); R2(e,a,b,c,d,31);
+	R2(d,e,a,b,c,32); R2(c,d,e,a,b,33); R2(b,c,d,e,a,34); R2(a,b,c,d,e,35);
+	R2(e,a,b,c,d,36); R2(d,e,a,b,c,37); R2(c,d,e,a,b,38); R2(b,c,d,e,a,39);
+	R3(a,b,c,d,e,40); R3(e,a,b,c,d,41); R3(d,e,a,b,c,42); R3(c,d,e,a,b,43);
+	R3(b,c,d,e,a,44); R3(a,b,c,d,e,45); R3(e,a,b,c,d,46); R3(d,e,a,b,c,47);
+	R3(c,d,e,a,b,48); R3(b,c,d,e,a,49); R3(a,b,c,d,e,50); R3(e,a,b,c,d,51);
+	R3(d,e,a,b,c,52); R3(c,d,e,a,b,53); R3(b,c,d,e,a,54); R3(a,b,c,d,e,55);
+	R3(e,a,b,c,d,56); R3(d,e,a,b,c,57); R3(c,d,e,a,b,58); R3(b,c,d,e,a,59);
+	R4(a,b,c,d,e,60); R4(e,a,b,c,d,61); R4(d,e,a,b,c,62); R4(c,d,e,a,b,63);
+	R4(b,c,d,e,a,64); R4(a,b,c,d,e,65); R4(e,a,b,c,d,66); R4(d,e,a,b,c,67);
+	R4(c,d,e,a,b,68); R4(b,c,d,e,a,69); R4(a,b,c,d,e,70); R4(e,a,b,c,d,71);
+	R4(d,e,a,b,c,72); R4(c,d,e,a,b,73); R4(b,c,d,e,a,74); R4(a,b,c,d,e,75);
+	R4(e,a,b,c,d,76); R4(d,e,a,b,c,77); R4(c,d,e,a,b,78); R4(b,c,d,e,a,79);
+
+	/* Add the working vars back into context.state[] */
+	state[0] += a;
+	state[1] += b;
+	state[2] += c;
+	state[3] += d;
+	state[4] += e;
+
+	/* Wipe variables */
+	a = b = c = d = e = 0;
 }
 
-#define HMAC_IPAD 0x36
-#define HMAC_OPAD 0x5c
 
-static void sha1_initHmac(sha1info *s, const uint8_t *key, int keyLength) {
-	uint8_t i;
+/* SHA1Init - Initialize new context */
+static void SHA1Init(SHA1_CTX* context) {
+	/* SHA1 initialization constants */
+	context->state[0] = 0x67452301;
+	context->state[1] = 0xEFCDAB89;
+	context->state[2] = 0x98BADCFE;
+	context->state[3] = 0x10325476;
+	context->state[4] = 0xC3D2E1F0;
+	context->count[0] = 0;
+	context->count[1] = 0;
+}
 
-	memset(s->keyBuffer, 0, BLOCK_LENGTH);
-	if (keyLength > BLOCK_LENGTH) {
-		/* Hash long keys */
-		sha1_init(s);
-		for (; keyLength--; ) {
-			sha1_writebyte(s, *key++);
+
+/* Run your data through this. */
+static void SHA1Update(SHA1_CTX* context, unsigned char* data, unsigned int len) {
+	unsigned int i, j;
+
+	j = (context->count[0] >> 3) & 63;
+	if ((context->count[0] += len << 3) < (len << 3)) {
+		context->count[1]++;
+	}
+
+	context->count[1] += (len >> 29);
+
+	if ((j + len) > 63) {
+		memcpy(&context->buffer[j], data, (i = 64-j));
+		SHA1Transform(context->state, context->buffer);
+		for ( ; i + 63 < len; i += 64) {
+			SHA1Transform(context->state, &data[i]);
 		}
-		memcpy(s->keyBuffer, sha1_result(s), HASH_LENGTH);
+		j = 0;
 	} else {
-		/* Block length keys are used as is */
-		memcpy(s->keyBuffer, key, keyLength);
+		i = 0;
 	}
 
-	/* Start inner hash */
-	sha1_init(s);
-	for (i=0; i<BLOCK_LENGTH; i++) {
-		sha1_writebyte(s, s->keyBuffer[i] ^ HMAC_IPAD);
-	}
-
-	return;
+	memcpy(&context->buffer[j], &data[i], len - i);
 }
 
-static uint8_t *sha1_resultHmac(sha1info *s) {
-	uint8_t i;
 
-	/* Complete inner hash */
-	memcpy(s->innerHash, sha1_result(s), HASH_LENGTH);
+/* Add padding and return the message digest. */
+static void SHA1Final(unsigned char digest[20], SHA1_CTX* context) {
+	unsigned long i;
+	unsigned char finalcount[8];
 
-	/* Calculate outer hash */
-	sha1_init(s);
-
-	for (i = 0; i < BLOCK_LENGTH; i++) {
-		sha1_writebyte(s, s->keyBuffer[i] ^ HMAC_OPAD);
-	}
-	for (i = 0; i < HASH_LENGTH; i++) {
-		sha1_writebyte(s, s->innerHash[i]);
+	for (i = 0; i < 8; i++) {
+		finalcount[i] = (unsigned char)((context->count[(i >= 4 ? 0 : 1)] >> ((3-(i & 3)) * 8) ) & 255);  /* Endian independent */
 	}
 
-	return(sha1_result(s));
+	SHA1Update(context, (unsigned char *) "\200", 1);
+
+	while ((context->count[0] & 504) != 448) {
+		SHA1Update(context, (unsigned char *)"\0", 1);
+	}
+
+	SHA1Update(context, finalcount, 8);  /* Should cause a SHA1Transform() */
+	for (i = 0; i < 20; i++) {
+		digest[i] = (unsigned char) ((context->state[i>>2] >> ((3-(i & 3)) * 8) ) & 255);
+	}
+
+	/* Wipe variables */
+	i = 0;
+
+	memset(context->buffer, 0, 64);
+	memset(context->state, 0, 20);
+	memset(context->count, 0, 8);
+	memset(&finalcount, 0, 8);
+#ifdef SHA1HANDSOFF  /* make SHA1Transform overwrite it's own static vars */
+	SHA1Transform(context->state, context->buffer);
+#endif
 }
 
 static Tcl_Obj* c_sha1__sha1_file(char* file) {
-
-	sha1info sha1;
-	uint8_t buf[4096];
+	SHA1_CTX ctx;
+	unsigned char digest[20];
+	unsigned char buf[4096];
 	int fd;
 	ssize_t read_ret;
 	Tcl_Obj *ret;
@@ -241,7 +222,7 @@ static Tcl_Obj* c_sha1__sha1_file(char* file) {
 		return(NULL);
 	}
 
-	sha1_init(&sha1);
+	SHA1Init(&ctx);
 
 	while (1) {
 		read_ret = read(fd, buf, sizeof(buf));
@@ -256,14 +237,14 @@ static Tcl_Obj* c_sha1__sha1_file(char* file) {
 			return(NULL);
 		}
 
-		sha1_write(&sha1, buf, read_ret);
+		SHA1Update(&ctx, buf, read_ret);
 	}
 
 	close(fd);
 
-	sha1_result(&sha1);
+	SHA1Final(digest, &ctx);
 
-	ret = Tcl_NewByteArrayObj(sha1_result(&sha1), HASH_LENGTH);
+	ret = Tcl_NewByteArrayObj(digest, sizeof(digest));
 
 	return(ret);
 }
@@ -281,29 +262,29 @@ static int tcl_sha1__sha1_file(ClientData dummy, Tcl_Interp *ip, int objc, Tcl_O
 	if (rv == NULL) {
 		return(TCL_ERROR);
 	}
-	Tcl_SetObjResult(ip, rv); Tcl_DecrRefCount(rv);
+	Tcl_SetObjResult(ip, rv);
 	return TCL_OK;
 }
 
 static Tcl_Obj* c_sha1__sha1_string(Tcl_Obj* str) {
-
-	sha1info sha1;
+	SHA1_CTX ctx;
+	unsigned char digest[20];
 	unsigned char *buf;
 	int buf_len;
 	Tcl_Obj *ret;
 
-	sha1_init(&sha1);
+	SHA1Init(&ctx);
 
 	buf = Tcl_GetByteArrayFromObj(str, &buf_len);
 	if (buf == NULL) {
 		return(NULL);
 	}
 
-	sha1_write(&sha1, buf, buf_len);
+	SHA1Update(&ctx, buf, buf_len);
 
-	sha1_result(&sha1);
+	SHA1Final(digest, &ctx);
 
-	ret = Tcl_NewByteArrayObj(sha1_result(&sha1), HASH_LENGTH);
+	ret = Tcl_NewByteArrayObj(digest, sizeof(digest));
 
 	return(ret);
 }
@@ -321,7 +302,7 @@ static int tcl_sha1__sha1_string(ClientData dummy, Tcl_Interp *ip, int objc, Tcl
 	if (rv == NULL) {
 		return(TCL_ERROR);
 	}
-	Tcl_SetObjResult(ip, rv); Tcl_DecrRefCount(rv);
+	Tcl_SetObjResult(ip, rv);
 	return TCL_OK;
 }
 
@@ -333,6 +314,9 @@ int Sha1_Init(Tcl_Interp *interp) {
 #endif
 	Tcl_CreateObjCommand(interp, "sha1::_sha1_file", tcl_sha1__sha1_file, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "sha1::_sha1_string", tcl_sha1__sha1_string, NULL, NULL);
+	Tcl_Eval(interp,
+#include "sha1.tcl.h"
+	);
 	Tcl_PkgProvide(interp, "sha1", "1.0");
 	return(TCL_OK);
 }
