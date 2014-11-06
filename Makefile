@@ -30,8 +30,8 @@ appfsd: appfsd.o
 appfsd.o: appfsd.c appfsd.tcl.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o appfsd.o -c appfsd.c
 
-appfsd.tcl.h: appfsd.tcl
-	sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' appfsd.tcl > appfsd.tcl.h.new
+appfsd.tcl.h: appfsd.tcl sha1.tcl
+	sed '/@@SHA1\.TCL@@/ r sha1.tcl' appfsd.tcl | sed '/@@SHA1\.TCL@@/ d' | sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' > appfsd.tcl.h.new
 	mv appfsd.tcl.h.new appfsd.tcl.h
 
 install: appfsd

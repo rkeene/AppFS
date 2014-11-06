@@ -2,7 +2,13 @@
 
 package require http 2.7
 package require sqlite3
-package require sha1
+
+if {[catch {
+	package require sha1
+}]} {
+	@@SHA1.TCL@@
+	package require sha1
+}
 
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
@@ -28,36 +34,38 @@ namespace eval ::appfs {
 
 		file mkdir [file dirname $file]
 
-		if {![file exists $file]} {
-			set tmpfile "${file}.new"
+		if {[file exists $file]} {
+			return $file
+		}
 
-			set fd [open $tmpfile "w"]
-			fconfigure $fd -translation binary
+		set tmpfile "${file}.[expr {rand()}]"
 
-			catch {
-				set token [::http::geturl $url -channel $fd -binary true]
-			}
+		set fd [open $tmpfile "w"]
+		fconfigure $fd -translation binary
 
-			if {[info exists token]} {
-				set ncode [::http::ncode $token]
-				::http::reset $token
-			} else {
-				set ncode "900"
-			}
+		catch {
+			set token [::http::geturl $url -channel $fd -binary true]
+		}
 
-			close $fd
+		if {[info exists token]} {
+			set ncode [::http::ncode $token]
+			::http::reset $token
+		} else {
+			set ncode "900"
+		}
 
-			if {$keyIsHash} {
-				set hash [string tolower [sha1::sha1 -hex -file $tmpfile]]
-			} else {
-				set hash $key
-			}
+		close $fd
 
-			if {$ncode == "200" && $hash == $key} {
-				file rename -force -- $tmpfile $file
-			} else {
-				file delete -force -- $tmpfile
-			}
+		if {$keyIsHash} {
+			set hash [string tolower [sha1::sha1 -hex -file $tmpfile]]
+		} else {
+			set hash $key
+		}
+
+		if {$ncode == "200" && $hash == $key} {
+			file rename -force -- $tmpfile $file
+		} else {
+			file delete -force -- $tmpfile
 		}
 
 		return $file
@@ -92,6 +100,9 @@ namespace eval ::appfs {
 			"sunos" {
 				return "solaris"
 			}
+			"noarch" - "none" - "any" - "all" {
+				return "noarch"
+			}
 		}
 
 		return -code error "Unable to normalize OS: $os"
@@ -106,6 +117,9 @@ namespace eval ::appfs {
 			}
 			"x86_64" {
 				return $cpu
+			}
+			"noarch" - "none" - "any" - "all" {
+				return "noarch"
 			}
 		}
 
@@ -141,7 +155,7 @@ namespace eval ::appfs {
 		set file [_cachefile $url $hash]
 
 		if {![file exists $file]} {
-			return -code error "Unable to fetch"
+			return -code error "Unable to fetch (file does not exist: $file)"
 		}
 
 		return $file
@@ -175,7 +189,7 @@ namespace eval ::appfs {
 				set indexhash_data [::http::data $token]
 			}
 			::http::reset $token
-			$token cleanup
+			::http::cleanup $token
 		}
 
 		if {![info exists indexhash_data]} {
@@ -211,13 +225,17 @@ namespace eval ::appfs {
 			set work [split $line ","]
 
 			unset -nocomplain pkgInfo
-			set pkgInfo(package)  [lindex $work 0]
-			set pkgInfo(version)  [lindex $work 1]
-			set pkgInfo(os)       [_normalizeOS [lindex $work 2]]
-			set pkgInfo(cpuArch)  [_normalizeCPU [lindex $work 3]]
-			set pkgInfo(hash)     [string tolower [lindex $work 4]]
-			set pkgInfo(hash_type) "sha1"
-			set pkgInfo(isLatest) [expr {!![lindex $work 5]}]
+			if {[catch {
+				set pkgInfo(package)  [lindex $work 0]
+				set pkgInfo(version)  [lindex $work 1]
+				set pkgInfo(os)       [_normalizeOS [lindex $work 2]]
+				set pkgInfo(cpuArch)  [_normalizeCPU [lindex $work 3]]
+				set pkgInfo(hash)     [string tolower [lindex $work 4]]
+				set pkgInfo(hash_type) "sha1"
+				set pkgInfo(isLatest) [expr {!![lindex $work 5]}]
+			}]} {
+				continue
+			}
 
 			if {![_isHash $pkgInfo(hash)]} {
 				continue
