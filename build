@@ -320,7 +320,7 @@ postinstall || die 'postinstall failed'
 			find "${appdir}" -print0 | xargs -0 touch -a -t "${pkgdate}"
 			;;
 		archive)
-			archivefile="${scriptdir}/${pkg}-${version}-$(echo "${pkgdate}" | sed 's@\.@@g')-${domain}.cpio"
+			archivefile="${scriptdir}/${pkg}-${version}-$(echo "${pkgdate}" | sed 's@\.@@g')-${os}-${arch}-${domain}.cpio"
 			cd "${destdir}/${prefix}/../../.." || exit 1
 			find "${prefixsuffix}" -print0 | xargs -0 touch -t "${pkgdate}"
 			find "${prefixsuffix}" -print0 | xargs -0 touch -m -t "${pkgdate}"
