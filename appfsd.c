@@ -643,6 +643,10 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 		}
 
 		mode = "";
+
+		if ((fi->flags & O_WRONLY) == O_WRONLY) {
+			mode = "write";
+		}
 	}
 
 	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {

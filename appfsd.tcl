@@ -481,6 +481,11 @@ namespace eval ::appfs {
 		array set pathinfo [_parsepath $path]
 		array set retval [list]
 
+		catch {
+			::appfs::getindex $pathinfo(hostname)
+			::appfs::getpkgmanifest $pathinfo(hostname) $pathinfo(package_sha1)
+		}
+
 		switch -- $pathinfo(_type) {
 			"toplevel" {
 				set retval(type) directory
@@ -526,6 +531,7 @@ namespace eval ::appfs {
 				}
 			}
 			"files" {
+
 				set retval(packaged) 1
 
 				set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
@@ -585,21 +591,36 @@ namespace eval ::appfs {
 			return $localpath
 		}
 
+		if {$mode == "create"} {
+			return $localpath
+		}
+
 		set work [split $pathinfo(file) "/"]
 		set directory [join [lrange $work 0 end-1] "/"]
 		set file [lindex $work end]
-		set file_sha1 [::appfs::db onecolumn {SELECT file_sha1 FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_name = $file AND file_directory = $directory;}]
+		::appfs::db eval {SELECT file_sha1, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_name = $file AND file_directory = $directory;} pkgpathinfo {}
 
-		if {$file_sha1 == ""} {
+		if {$pkgpathinfo(file_sha1) == ""} {
 			return -code error "No such file or directory"
 		}
 
-		set localcachefile [download $pathinfo(hostname) $file_sha1]
+		set localcachefile [download $pathinfo(hostname) $pkgpathinfo(file_sha1)]
 
-		if {$mode == "create"} {
+		if {$mode == "write"} {
 			set tmplocalpath "${localpath}.[expr rand()][clock clicks]"
-			file copy -force -- $localcachefile $tmplocalpath
-			file rename -force -- $tmplocalpath $localpath
+
+			catch {
+				file copy -force -- $localcachefile $tmplocalpath
+
+				if {$pkgpathinfo(perms) == "x"} {
+					file attributes $tmplocalpath -permissions +x
+				}
+
+				file rename -force -- $tmplocalpath $localpath
+			}
+			catch {
+				file delete -force -- $tmplocalpath
+			}
 
 			return $localpath
 		}
