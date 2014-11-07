@@ -786,7 +786,7 @@ int main(int argc, char **argv) {
 	 * Add FUSE arguments which we always supply
 	 */
 	fuse_opt_parse(&args, NULL, NULL, NULL);
-	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,use_ino,kernel_cache,entry_timeout=60,attr_timeout=3600,intr,big_writes");
+	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=60,attr_timeout=3600,intr,big_writes");
 
 	if (getuid() == 0) {
 		fuse_opt_parse(&args, NULL, NULL, NULL);
