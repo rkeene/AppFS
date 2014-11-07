@@ -37,9 +37,12 @@ sha1.o: sha1.c sha1.tcl.h
 	sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' $^ > $@.new
 	mv $@.new $@
 
-install: appfsd
+install: appfsd appfs-cache appfs-mkfs
 	if [ ! -d '$(DESTDIR)$(sbindir)' ]; then mkdir -p '$(DESTDIR)$(sbindir)'; chmod 755 '$(DESTDIR)$(sbindir)'; fi
+	if [ ! -d '$(DESTDIR)$(bindir)' ]; then mkdir -p '$(DESTDIR)$(bindir)'; chmod 755 '$(DESTDIR)$(bindir)'; fi
 	cp appfsd '$(DESTDIR)$(sbindir)/'
+	cp appfs-cache '$(DESTDIR)$(sbindir)/'
+	cp appfs-mkfs '$(DESTDIR)$(bindir)/'
 
 clean:
 	rm -f appfsd appfsd.o
