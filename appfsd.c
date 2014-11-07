@@ -38,18 +38,11 @@ int Sha1_Init(Tcl_Interp *interp);
 static pthread_key_t interpKey;
 
 /*
- * Data for a given thread (most likely these will become just globable variables soon.)
+ * Global variables, needed for all threads but only initialized before any
+ * FUSE threads are created
  */
-struct appfs_thread_data {
-	const char *cachedir;
-	time_t boottime;
-	struct {
-		int writable;
-	} options;
-};
-
-/* The global thread data (likely to go away) */
-struct appfs_thread_data globalThread;
+const char *appfs_cachedir;
+time_t appfs_boottime;
 
 /*
  * AppFS Path Type:  Describes the type of path a given file is
@@ -100,7 +93,6 @@ struct appfs_pathinfo {
  */
 static Tcl_Interp *appfs_create_TclInterp(void) {
 	Tcl_Interp *interp;
-	const char *cachedir = globalThread.cachedir;
 	int tcl_ret;
 
 	APPFS_DEBUG("Creating new Tcl interpreter for TID = 0x%llx", (unsigned long long) pthread_self());
@@ -162,7 +154,7 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 	/*
 	 * Set global variables from C to Tcl
 	 */
-	if (Tcl_SetVar(interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
+	if (Tcl_SetVar(interp, "::appfs::cachedir", appfs_cachedir, TCL_GLOBAL_ONLY) == NULL) {
 		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
 
 		Tcl_DeleteInterp(interp);
@@ -535,7 +527,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	}
 
 	if (pathinfo.packaged) {
-		if (globalThread.options.writable) {
+		if (0) {
 			stbuf->st_mode |= 0222;
 		}
 	}
@@ -736,7 +728,7 @@ static int appfs_fuse_opt_cb(void *data, const char *arg, int key, struct fuse_a
 	if (key == FUSE_OPT_KEY_NONOPT && seen_cachedir == 0) {
 		seen_cachedir = 1;
 
-		globalThread.cachedir = strdup(arg);
+		appfs_cachedir = strdup(arg);
 
 		return(0);
 	}
@@ -763,14 +755,13 @@ int main(int argc, char **argv) {
 	/*
 	 * Set global variables, these should be configuration options.
 	 */
-	globalThread.cachedir = APPFS_CACHEDIR;
-	globalThread.options.writable = 1;
+	appfs_cachedir = APPFS_CACHEDIR;
 
 	/*
 	 * Set global variable for "boot time" to set a time on directories
 	 * that we fake.
 	 */
-	globalThread.boottime = time(NULL);
+	appfs_boottime = time(NULL);
 
 	/*
 	 * Register "sha1" and "appfsd" package with libtcl so that any new
@@ -799,7 +790,7 @@ int main(int argc, char **argv) {
 	 */
 	if (argc >= 2) {
 		if (strcmp(argv[0], "--cachedir") == 0) {
-			globalThread.cachedir = strdup(argv[1]);
+			appfs_cachedir = strdup(argv[1]);
 
 			argc -= 2;
 			argv += 2;
