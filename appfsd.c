@@ -794,6 +794,8 @@ int main(int argc, char **argv) {
 
 	/*
 	 * Manually specify cache directory, without FUSE callback
+	 * This option only works when not using FUSE, since we
+	 * do not process it with FUSEs option processing.
 	 */
 	if (argc >= 2) {
 		if (strcmp(argv[0], "--cachedir") == 0) {
