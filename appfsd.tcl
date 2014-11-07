@@ -9,6 +9,11 @@ namespace eval ::appfs {
 	variable ttl 3600
 	variable nttl 60
 
+	# User-replacable function to convert a hostname/hash/method to an URL
+	proc _construct_url {hostname hash method} {
+		return "http://$hostname/appfs/$method/$hash"
+	}
+
 	proc _hash_sep {hash {seps 4}} {
 		for {set idx 0} {$idx < $seps} {incr idx} {
 			append retval "[string range $hash [expr {$idx * 2}] [expr {($idx * 2) + 1}]]/"
@@ -128,6 +133,12 @@ namespace eval ::appfs {
 
 		set ::appfs::init_called 1
 
+		# Load configuration file
+		set config_file [file join $::appfs::cachedir config]
+		if {[file exists $config_file]} {
+			source $config_file
+		}
+
 		if {![info exists ::appfs::db]} {
 			file mkdir $::appfs::cachedir
 
@@ -146,7 +157,7 @@ namespace eval ::appfs {
 	}
 
 	proc download {hostname hash {method sha1}} {
-		set url "http://$hostname/appfs/$method/$hash"
+		set url [_construct_url $hostname $hash $method]
 		set file [_cachefile $url $hash]
 
 		if {![file exists $file]} {
@@ -327,5 +338,104 @@ namespace eval ::appfs {
 		}
 
 		return COMPLETE
+	}
+
+	proc _parsepath {path} {
+		set path [string trim $path "/"]
+		set path [split $path "/"]
+		set pathlen [llength $path]
+
+		array set retval [list _children sites]
+
+		if {$pathlen > 0} {
+			set retval(hostname) [lindex $path 0]
+			set retval(_children) packages
+
+			if {$pathlen > 1} {
+				set package [lindex $path 1]
+				if {[string length $package] == "40" && [regexp {^[a-fA-F0-9]*$} $package]} {
+					set retval(package_sha1) $package
+					set retval(_children) files
+
+					if {$pathlen > 2} {
+						set retval(file) [join [lrange $path 2 end] "/"]
+					} else {
+						set retval(file) ""
+					}
+
+					return [array get retval]
+				} else {
+					set retval(package) $package
+					set retval(_children) os-cpu
+				}
+
+				if {$pathlen > 2} {
+					set os_cpu [lindex $path 2]
+					set os_cpu [split $os_cpu "-"]
+
+					set retval(os) [lindex $os_cpu 0]
+					set retval(cpu) [lindex $os_cpu 1]
+					set retval(_children) versions
+
+					if {$pathlen > 3} {
+						set retval(version) [lindex $path 3]
+						set retval(_children) files
+
+						set retval(package_sha1) [::appfs::db onecolumn {SELECT sha1 FROM packages WHERE hostname = $retval(hostname) AND os = $retval(os) AND cpuArch = $retval(cpu) AND version = $retval(version);}]
+						if {$retval(package_sha1) == ""} {
+							return [list]
+						}
+
+						if {$pathlen > 4} {
+							set retval(file) [join [lrange $path 4 end] "/"]
+						} else {
+							set retval(file) ""
+						}
+					}
+				}
+			}
+		}
+
+		return [array get retval]
+	}
+
+	proc getchildren {dir} {
+		array set pathinfo [_parsepath $dir]
+
+		switch -- $pathinfo(_children) {
+			"sites" {
+				return [::appfs::db eval {SELECT DISTINCT hostname FROM packages;}]
+			}
+			"packages" {
+				catch {
+					::appfs::getindex $pathinfo(hostname)
+				}
+
+				return [::appfs::db eval {SELECT DISTINCT package FROM packages WHERE hostname = $pathinfo(hostname);}]
+			}
+			"os-cpu" {
+				return [::appfs::db eval {SELECT DISTINCT os || "-" || cpuArch FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package);}]
+			}
+			"versions" {
+				return [::appfs::db eval {
+					SELECT DISTINCT version FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package) AND os = $pathinfo(os) AND cpuArch = $pathinfo(cpu);
+				}]
+			}
+			"files" {
+				catch {
+					::appfs::getpkgmanifest $pathinfo(hostname) $pathinfo(package_sha1)
+				}
+
+				return [::appfs::db eval {SELECT DISTINCT file_name FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $pathinfo(file);}]
+			}
+		}
+
+		return -code error "Invalid or unacceptable path: $dir"
+	}
+
+	proc getattr {path} {
+	}
+
+	proc openpath {path mode} {
 	}
 }

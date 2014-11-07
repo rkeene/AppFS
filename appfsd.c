@@ -258,79 +258,6 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 }
 
 /*
- * AppFS: Request that a host's package index be updated locally
- */
-static void appfs_update_index(const char *hostname) {
-	Tcl_Interp *interp;
-	int tcl_ret;
-
-	APPFS_DEBUG("Enter: hostname = %s", hostname);
-
-	interp = appfs_TclInterp();
-	if (interp == NULL) {
-		return;
-	}
-
-	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getindex", hostname);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(interp));
-
-		return;
-	}
-
-	return;
-}
-
-/*
- * AppFS: Get a SHA1 from a host
- *         Returns a local file name, or NULL if it cannot be fetched
- */
-static const char *appfs_getfile(const char *hostname, const char *sha1) {
-	Tcl_Interp *interp;
-	char *retval;
-	int tcl_ret;
-
-	interp = appfs_TclInterp();
-	if (interp == NULL) {
-		return(NULL);
-	}
-
-	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::download", hostname, sha1);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::download failed: %s", Tcl_GetStringResult(interp));
-
-		return(NULL);
-	}
-
-	retval = strdup(Tcl_GetStringResult(interp));
-
-	return(retval);
-}
-
-/*
- * AppFS: Update the manifest for a specific package (by the package SHA1) on
- * a given host
- */
-static void appfs_update_manifest(const char *hostname, const char *sha1) {
-	Tcl_Interp *interp;
-	int tcl_ret;
-
-	interp = appfs_TclInterp();
-	if (interp == NULL) {
-		return;
-	}
-
-	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::getpkgmanifest", hostname, sha1);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getpkgmanifest failed: %s", Tcl_GetStringResult(interp));
-
-		return;
-	}
-
-	return;
-}
-
-/*
  * Determine the UID for the user making the current FUSE filesystem request.
  * This will be used to lookup the user's home directory so we can search for
  * locally modified files.
@@ -485,12 +412,8 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	pathinfo.type = APPFS_PATHTYPE_INVALID;
-
-	res = appfs_get_path_info(path, &pathinfo, NULL);
-	if (res != 0) {
-		return(res);
-	}
+	pathinfo.type = APPFS_PATHTYPE_DIRECTORY;
+	pathinfo.typeinfo.dir.childcount = 0;
 
 	memset(stbuf, 0, sizeof(struct stat));
 
@@ -536,25 +459,42 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 }
 
 static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
-	struct appfs_pathinfo pathinfo;
-	struct appfs_children *children, *child;
+	Tcl_Interp *interp;
+	Tcl_Obj **children;
+	int children_count, idx;
+	int tcl_ret;
 	int retval;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	retval = appfs_get_path_info(path, &pathinfo, &children);
-	if (retval != 0) {
-		return(retval);
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(0);
 	}
 
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
 
-	for (child = children; child; child = child->_next) {
-		filler(buf, child->name, NULL, 0);
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getchildren", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::getchildren(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		
+		return(0);
 	}
 
-//	appfs_free_list_children(children);
+	tcl_ret = Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &children_count, &children);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("Parsing list of children on path %s failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		
+		return(0);
+	}
+
+	for (idx = 0; idx < children_count; idx++) {
+		filler(buf, Tcl_GetString(children[idx]), NULL, 0);
+	}
 
 	return(0);
 }
