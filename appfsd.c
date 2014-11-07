@@ -385,7 +385,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
-		return(1);
+		return(-EIO);
 	}
 
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getattr", path);
@@ -393,7 +393,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
-		return(1);
+		return(-ENOENT);
 	}
 
 	if (attr_key_type == NULL) {
@@ -411,14 +411,15 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		APPFS_DEBUG("[dict get \"type\"] failed");
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
-		return(1);
+		return(-EIO);
 	}
 
 	if (attr_value == NULL) {
-		return(1);
+		return(-EIO);
 	}
 
 	pathinfo->packaged = 0;
+	pathinfo->inode = appfs_get_path_inode(path);
 
 	attr_value_str = Tcl_GetString(attr_value);
 	switch (attr_value_str[0]) {
@@ -474,7 +475,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 			}
 			break;
 		default:
-			return(1);
+			return(-EIO);
 	}
 
 	Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
@@ -579,7 +580,6 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	Tcl_Obj **children;
 	int children_count, idx;
 	int tcl_ret;
-	int retval;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
@@ -595,7 +595,7 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getchildren(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
-		
+
 		return(0);
 	}
 
@@ -603,7 +603,7 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("Parsing list of children on path %s failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
-		
+
 		return(0);
 	}
 
@@ -615,41 +615,62 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 }
 
 static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
+	Tcl_Interp *interp;
 	struct appfs_pathinfo pathinfo;
-	const char *real_path;
+	const char *real_path, *mode;
+	int gpi_ret, tcl_ret;
 	int fh;
-	int gpi_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-#if 0
+	gpi_ret = appfs_get_path_info(path, &pathinfo);
 
-	if ((fi->flags & 3) != O_RDONLY) {
-                return(-EACCES);
-	}
+	if ((fi->flags & (O_WRONLY|O_CREAT)) == (O_CREAT|O_WRONLY)) {
+		/* The file will be created if it does not exist */
+		if (gpi_ret != 0 && gpi_ret != -ENOENT) {
+			return(gpi_ret);
+		}
 
-	gpi_ret = appfs_get_path_info(path, &pathinfo, NULL);
-	if (gpi_ret != 0) {
-		return(gpi_ret);
+		mode = "create";
+	} else {
+		/* The file must already exist */
+		if (gpi_ret != 0) {
+			return(gpi_ret);
+		}
+
+		mode = "";
 	}
 
 	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {
 		return(-EISDIR);
 	}
 
-	real_path = appfs_getfile(pathinfo.hostname, pathinfo.typeinfo.file.sha1);
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(-EIO);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, mode);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, mode);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(-EIO);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
 	if (real_path == NULL) {
 		return(-EIO);
 	}
 
-	fh = open(real_path, O_RDONLY);
-	free((void *) real_path);
+	APPFS_DEBUG("Translated request to open %s to opening %s (mode = \"%s\")", path, real_path, mode);
+
+	fh = open(real_path, fi->flags, 0600);
 	if (fh < 0) {
 		return(-EIO);
 	}
 
 	fi->fh = fh;
-#endif
 
 	return(0);
 }
@@ -778,7 +799,7 @@ static struct fuse_operations appfs_operations = {
  * FUSE option parsing callback
  */
 static int appfs_fuse_opt_cb(void *data, const char *arg, int key, struct fuse_args *outargs) {
-	static seen_cachedir = 0;
+	static int seen_cachedir = 0;
 
 	if (key == FUSE_OPT_KEY_NONOPT && seen_cachedir == 0) {
 		seen_cachedir = 1;

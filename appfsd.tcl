@@ -38,7 +38,7 @@ namespace eval ::appfs {
 			return $file
 		}
 
-		set tmpfile "${file}.[expr {rand()}]"
+		set tmpfile "${file}.[expr {rand()}][clock clicks]"
 
 		set fd [open $tmpfile "w"]
 		fconfigure $fd -translation binary
@@ -344,6 +344,7 @@ namespace eval ::appfs {
 	proc _localpath {package hostname file} {
 		set homedir [::appfsd::get_homedir]
 		set dir [file join $homedir .appfs "./${package}@${hostname}" "./${file}"]
+		return $dir
 	}
 
 	proc _parsepath {path} {
@@ -529,5 +530,37 @@ namespace eval ::appfs {
 	}
 
 	proc openpath {path mode} {
+		array set pathinfo [_parsepath $path]
+
+		if {$pathinfo(_type) != "files"} {
+			return -code error "invalid type"
+		}
+
+		set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
+
+		if {[file exists $localpath]} {
+			return $localpath
+		}
+
+		set work [split $pathinfo(file) "/"]
+		set directory [join [lrange $work 0 end-1] "/"]
+		set file [lindex $work end]
+		set file_sha1 [::appfs::db onecolumn {SELECT file_sha1 FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_name = $file AND file_directory = $directory;}]
+
+		if {$file_sha1 == ""} {
+			return -code error "No such file or directory"
+		}
+
+		set localcachefile [download $pathinfo(hostname) $file_sha1]
+
+		if {$mode == "create"} {
+			set tmplocalpath "${localpath}.[expr rand()][clock clicks]"
+			file copy -force -- $localcachefile $tmplocalpath
+			file rename -force -- $tmplocalpath $localpath
+
+			return $localpath
+		}
+
+		return $localcachefile
 	}
 }
