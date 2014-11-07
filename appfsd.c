@@ -718,7 +718,7 @@ static int Appfsd_Init(Tcl_Interp *interp) {
 /*
  * FUSE operations structure
  */
-static struct fuse_operations appfs_oper = {
+static struct fuse_operations appfs_operations = {
 	.getattr   = appfs_fuse_getattr,
 	.readdir   = appfs_fuse_readdir,
 	.readlink  = appfs_fuse_readlink,
@@ -731,6 +731,7 @@ static struct fuse_operations appfs_oper = {
  * Entry point into this program.
  */
 int main(int argc, char **argv) {
+	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	const char *cachedir = APPFS_CACHEDIR;
 	int pthread_ret;
 
@@ -782,9 +783,15 @@ int main(int argc, char **argv) {
 	}
 
 	/*
+	 * Add FUSE arguments which we always supply
+	 */
+	fuse_opt_parse(&args, NULL, NULL, NULL);
+	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,use_ino,kernel_cache,entry_timeout=60,attr_timeout=3600,intr,big_writes");
+
+	/*
 	 * Enter the FUSE main loop -- this will process any arguments
 	 * and start servicing requests.
 	 */
-	return(fuse_main(argc, argv, &appfs_oper, NULL));
+	return(fuse_main(args.argc, args.argv, &appfs_operations, NULL));
 }
  
