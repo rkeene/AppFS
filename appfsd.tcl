@@ -80,10 +80,6 @@ namespace eval ::appfs {
 		return true
 	}
 
-	proc _db {args} {
-		return [uplevel 1 [list ::appfs::db {*}$args]]
-	}
-
 	proc _normalizeOS {os} {
 		set os [string tolower [string trim $os]]
 
@@ -125,6 +121,11 @@ namespace eval ::appfs {
 			return
 		}
 
+		# Force [parray] to be loaded
+		catch {
+			parray does_not_exist
+		}
+
 		set ::appfs::init_called 1
 
 		if {![info exists ::appfs::db]} {
@@ -134,14 +135,14 @@ namespace eval ::appfs {
 		}
 
 		# Create tables
-		_db eval {CREATE TABLE IF NOT EXISTS sites(hostname PRIMARY KEY, lastUpdate, ttl);}
-		_db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest);}
-		_db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory);}
+		db eval {CREATE TABLE IF NOT EXISTS sites(hostname PRIMARY KEY, lastUpdate, ttl);}
+		db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest);}
+		db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory);}
 
 		# Create indexes
-		_db eval {CREATE INDEX IF NOT EXISTS sites_index ON sites (hostname);}
-		_db eval {CREATE INDEX IF NOT EXISTS packages_index ON packages (hostname, package, version, os, cpuArch);}
-		_db eval {CREATE INDEX IF NOT EXISTS files_index ON files (package_sha1, file_name, file_directory);}
+		db eval {CREATE INDEX IF NOT EXISTS sites_index ON sites (hostname);}
+		db eval {CREATE INDEX IF NOT EXISTS packages_index ON packages (hostname, package, version, os, cpuArch);}
+		db eval {CREATE INDEX IF NOT EXISTS files_index ON files (package_sha1, file_name, file_directory);}
 	}
 
 	proc download {hostname hash {method sha1}} {
@@ -158,7 +159,7 @@ namespace eval ::appfs {
 	proc getindex {hostname} {
 		set now [clock seconds]
 
-		set lastUpdates [_db eval {SELECT lastUpdate, ttl FROM sites WHERE hostname = $hostname LIMIT 1;}]
+		set lastUpdates [db eval {SELECT lastUpdate, ttl FROM sites WHERE hostname = $hostname LIMIT 1;}]
 		if {[llength $lastUpdates] == 0} {
 			set lastUpdate 0
 			set ttl 0
@@ -188,7 +189,7 @@ namespace eval ::appfs {
 
 		if {![info exists indexhash_data]} {
 			# Cache this result for 60 seconds
-			_db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::nttl);}
+			db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::nttl);}
 
 			return -code error "Unable to fetch $url"
 		}
@@ -238,20 +239,20 @@ namespace eval ::appfs {
 			lappend curr_packages $pkgInfo(hash)
 
 			# Do not do any additional work if we already have this package
-			set existing_packages [_db eval {SELECT package FROM packages WHERE hostname = $hostname AND sha1 = $pkgInfo(hash);}]
+			set existing_packages [db eval {SELECT package FROM packages WHERE hostname = $hostname AND sha1 = $pkgInfo(hash);}]
 			if {[lsearch -exact $existing_packages $pkgInfo(package)] != -1} {
 				continue
 			}
 
 			if {$pkgInfo(isLatest)} {
-				_db eval {UPDATE packages SET isLatest = 0 WHERE hostname = $hostname AND package = $pkgInfo($package) AND os = $pkgInfo($package) AND cpuArch = $pkgInfo(cpuArch);}
+				db eval {UPDATE packages SET isLatest = 0 WHERE hostname = $hostname AND package = $pkgInfo($package) AND os = $pkgInfo($package) AND cpuArch = $pkgInfo(cpuArch);}
 			}
 
-			_db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
+			db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
 		}
 
 		# Look for packages that have been deleted
-		set found_packages [_db eval {SELECT sha1 FROM packages WHERE hostname = $hostname;}]
+		set found_packages [db eval {SELECT sha1 FROM packages WHERE hostname = $hostname;}]
 		foreach package $found_packages {
 			set found_packages_arr($package) 1
 		}
@@ -261,16 +262,16 @@ namespace eval ::appfs {
 		}
 
 		foreach package [array names found_packages_arr] {
-			_db eval {DELETE FROM packages WHERE hostname = $hostname AND sha1 = $package;}
+			db eval {DELETE FROM packages WHERE hostname = $hostname AND sha1 = $package;}
 		}
 
-		_db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::ttl);}
+		db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::ttl);}
 
 		return COMPLETE
 	}
 
 	proc getpkgmanifest {hostname package_sha1} {
-		set haveManifests [_db eval {SELECT haveManifest FROM packages WHERE sha1 = $package_sha1 LIMIT 1;}]
+		set haveManifests [db eval {SELECT haveManifest FROM packages WHERE sha1 = $package_sha1 LIMIT 1;}]
 		set haveManifest [lindex $haveManifests 0]
 
 		if {$haveManifest} {
@@ -286,7 +287,7 @@ namespace eval ::appfs {
 		set pkgdata [read $fd]
 		close $fd
 
-		_db transaction {
+		db transaction {
 			foreach line [split $pkgdata "\n"] {
 				set line [string trim $line]
 
@@ -320,8 +321,8 @@ namespace eval ::appfs {
 				set fileInfo(directory) [join [lrange $fileInfo(name) 0 end-1] "/"]
 				set fileInfo(name) [lindex $fileInfo(name) end]
 
-				_db eval {INSERT INTO files (package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(perms), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
-				_db eval {UPDATE packages SET haveManifest = 1 WHERE sha1 = $package_sha1;}
+				db eval {INSERT INTO files (package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory) VALUES ($package_sha1, $fileInfo(type), $fileInfo(time), $fileInfo(source), $fileInfo(size), $fileInfo(perms), $fileInfo(sha1), $fileInfo(name), $fileInfo(directory) );}
+				db eval {UPDATE packages SET haveManifest = 1 WHERE sha1 = $package_sha1;}
 			}
 		}
 

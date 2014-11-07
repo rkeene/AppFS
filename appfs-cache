@@ -1,0 +1,18 @@
+#! /usr/bin/env bash
+
+case "$1" in
+	invalidate)
+		statement='UPDATE sites SET ttl = "0";'
+		;;
+	clear)
+		rm -rf 
+		statement='DELETE FROM sites; DELETE FROM packages; DELETE FROM files;'
+		;;
+	*)
+		echo "Usage: appfs-cache {invalidate|clear}" >&2
+
+		exit 1
+		;;
+esac
+
+exec appfsd -sqlite3 "${statement}"
