@@ -13,21 +13,33 @@
 #include <pwd.h>
 #include <tcl.h>
 
-/* From sha1.c */
-int Sha1_Init(Tcl_Interp *interp);
-
+/*
+ * Default cache directory
+ */
 #ifndef APPFS_CACHEDIR
 #define APPFS_CACHEDIR "/var/cache/appfs"
 #endif
 
+/* Debugging macros */
 #ifdef DEBUG
 #define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 #else
 #define APPFS_DEBUG(x...) /**/
 #endif
 
+/*
+ * SHA1 Tcl Package initializer, from sha1.o
+ */
+int Sha1_Init(Tcl_Interp *interp);
+
+/*
+ * Thread Specific Data (TSD) for Tcl Interpreter for the current thread
+ */
 static pthread_key_t interpKey;
 
+/*
+ * Data for a given thread (most likely these will become just globable variables soon.)
+ */
 struct appfs_thread_data {
 	const char *cachedir;
 	time_t boottime;
@@ -36,8 +48,12 @@ struct appfs_thread_data {
 	} options;
 };
 
+/* The global thread data (likely to go away) */
 struct appfs_thread_data globalThread;
 
+/*
+ * AppFS Path Type:  Describes the type of path a given file is
+ */
 typedef enum {
 	APPFS_PATHTYPE_INVALID,
 	APPFS_PATHTYPE_FILE,
@@ -45,13 +61,19 @@ typedef enum {
 	APPFS_PATHTYPE_SYMLINK
 } appfs_pathtype_t;
 
+/*
+ * AppFS Children Files linked-list
+ */
 struct appfs_children {
 	struct appfs_children *_next;
-	int counter;
-
 	char name[256];
 };
 
+/*
+ * AppFS Path Information:
+ *         Completely describes a specific path, how it should be returned to
+ *         to the kernel
+ */
 struct appfs_pathinfo {
 	appfs_pathtype_t type;
 	time_t time;
@@ -73,6 +95,9 @@ struct appfs_pathinfo {
 	} typeinfo;
 };
 
+/*
+ * Create a new Tcl interpreter and completely initialize it
+ */
 static Tcl_Interp *appfs_create_TclInterp(void) {
 	Tcl_Interp *interp;
 	const char *cachedir = globalThread.cachedir;
@@ -117,6 +142,11 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 		return(NULL);
 	}
 
+	/*
+	 * Load the "appfsd.tcl" script, which is "compiled" into a C header
+	 * so that it does not need to exist on the filesystem and can be
+	 * directly evaluated.
+	 */
 	tcl_ret = Tcl_Eval(interp, ""
 #include "appfsd.tcl.h"
 	"");
@@ -129,6 +159,9 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 		return(NULL);
 	}
 
+	/*
+	 * Set global variables from C to Tcl
+	 */
 	if (Tcl_SetVar(interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
 		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
 
@@ -137,6 +170,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 		return(NULL);
 	}
 
+	/*
+	 * Initialize the "appfsd.tcl" environment, which must be done after
+	 * global variables are set.
+	 */
 	tcl_ret = Tcl_Eval(interp, "::appfs::init");
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
@@ -147,14 +184,25 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 		return(NULL);
 	}
 
+	/*
+	 * Hide some Tcl commands that we do not care to use and which may
+	 * slow down run-time operations.
+	 */
 	Tcl_HideCommand(interp, "auto_load_index", "auto_load_index");
 	Tcl_HideCommand(interp, "unknown", "unknown");
 
+	/*
+	 * Return the completely initialized interpreter
+	 */
 	return(interp);
 }
 
+/*
+ * Return the thread-specific Tcl interpreter, creating it if needed
+ */
 static Tcl_Interp *appfs_TclInterp(void) {
 	Tcl_Interp *interp;
+	int pthread_ret;
 
 	interp = pthread_getspecific(interpKey);
 	if (interp == NULL) {
@@ -164,12 +212,21 @@ static Tcl_Interp *appfs_TclInterp(void) {
 			return(NULL);
 		}
 
-		pthread_setspecific(interpKey, interp);
+		pthread_ret = pthread_setspecific(interpKey, interp);
+		if (pthread_ret != 0) {
+			Tcl_DeleteInterp(interp);
+
+			return(NULL);
+		}
 	}
 
 	return(interp);
 }
 
+/*
+ * Evaluate a Tcl script constructed by concatenating a bunch of C strings
+ * together.
+ */
 static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	Tcl_Obj **objv;
 	const char *arg;
@@ -208,6 +265,9 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	return(retval);
 }
 
+/*
+ * AppFS: Request that a host's package index be updated locally
+ */
 static void appfs_update_index(const char *hostname) {
 	Tcl_Interp *interp;
 	int tcl_ret;
@@ -229,6 +289,10 @@ static void appfs_update_index(const char *hostname) {
 	return;
 }
 
+/*
+ * AppFS: Get a SHA1 from a host
+ *         Returns a local file name, or NULL if it cannot be fetched
+ */
 static const char *appfs_getfile(const char *hostname, const char *sha1) {
 	Tcl_Interp *interp;
 	char *retval;
@@ -251,6 +315,10 @@ static const char *appfs_getfile(const char *hostname, const char *sha1) {
 	return(retval);
 }
 
+/*
+ * AppFS: Update the manifest for a specific package (by the package SHA1) on
+ * a given host
+ */
 static void appfs_update_manifest(const char *hostname, const char *sha1) {
 	Tcl_Interp *interp;
 	int tcl_ret;
@@ -270,6 +338,11 @@ static void appfs_update_manifest(const char *hostname, const char *sha1) {
 	return;
 }
 
+/*
+ * Determine the UID for the user making the current FUSE filesystem request.
+ * This will be used to lookup the user's home directory so we can search for
+ * locally modified files.
+ */
 static uid_t appfs_get_fsuid(void) {
 	struct fuse_context *ctx;
 
@@ -283,6 +356,12 @@ static uid_t appfs_get_fsuid(void) {
 	return(ctx->uid);
 }
 
+/*
+ * Look up the home directory for a given UID
+ *        Returns a C string containing the user's home directory or NULL if
+ *        the user's home directory does not exist or is not correctly
+ *        configured
+ */
 static char *appfs_get_homedir(uid_t fsuid) {
 	struct passwd entry, *result;
 	struct stat stbuf;
@@ -330,6 +409,10 @@ static char *appfs_get_homedir(uid_t fsuid) {
 	return(retval);
 }
 
+/*
+ * Tcl interface to get the home directory for the user making the "current"
+ * FUSE I/O request
+ */
 static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
 	char *homedir;
 
@@ -351,7 +434,11 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
         return(TCL_OK);
 }
 
-/* Generate an inode for a given path */
+/*
+ * Generate an inode for a given path.  The inode should be computed in such
+ * a way that it is unlikely to be duplicated and remains the same for a given
+ * file
+ */
 static long long appfs_get_path_inode(const char *path) {
 	long long retval;
 	const char *p;
@@ -547,6 +634,9 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 	return(read_ret);
 }
 
+/*
+ * SQLite3 mode: Execute raw SQL and return success or failure
+ */
 static int appfs_sqlite3(const char *sql) {
 	Tcl_Interp *interp;
 	const char *sql_ret;
@@ -575,6 +665,9 @@ static int appfs_sqlite3(const char *sql) {
 	return(0);
 }
 
+/*
+ * Tcl mode: Execute raw Tcl and return success or failure
+ */
 static int appfs_tcl(const char *tcl) {
 	Tcl_Interp *interp;
 	const char *tcl_result;
@@ -603,6 +696,11 @@ static int appfs_tcl(const char *tcl) {
 	return(0);
 }
 
+/*
+ * AppFSd Package for Tcl:
+ *         Bridge for I/O operations to request information about the current
+ *         transaction
+ */
 static int Appfsd_Init(Tcl_Interp *interp) {
 #ifdef USE_TCL_STUBS
 	if (Tcl_InitStubs(interp, TCL_VERSION, 0) == 0L) {
@@ -617,6 +715,9 @@ static int Appfsd_Init(Tcl_Interp *interp) {
 	return(TCL_OK);
 }
 
+/*
+ * FUSE operations structure
+ */
 static struct fuse_operations appfs_oper = {
 	.getattr   = appfs_fuse_getattr,
 	.readdir   = appfs_fuse_readdir,
@@ -626,17 +727,38 @@ static struct fuse_operations appfs_oper = {
 	.read      = appfs_fuse_read
 };
 
+/*
+ * Entry point into this program.
+ */
 int main(int argc, char **argv) {
 	const char *cachedir = APPFS_CACHEDIR;
 	int pthread_ret;
 
+	/*
+	 * Set global variables, these should be configuration options.
+	 */
 	globalThread.cachedir = cachedir;
-	globalThread.boottime = time(NULL);
 	globalThread.options.writable = 1;
 
+	/*
+	 * Set global variable for "boot time" to set a time on directories
+	 * that we fake.
+	 */
+	globalThread.boottime = time(NULL);
+
+	/*
+	 * Register "sha1" and "appfsd" package with libtcl so that any new
+	 * interpreters created (which are done dynamically by FUSE) can have
+	 * the appropriate configuration done automatically.
+	 */
 	Tcl_StaticPackage(NULL, "sha1", Sha1_Init, NULL);
 	Tcl_StaticPackage(NULL, "appfsd", Appfsd_Init, NULL);
 
+	/*
+	 * Create a thread-specific-data (TSD) key for each thread to refer
+	 * to its own Tcl interpreter.  Tcl interpreters must be unique per
+	 * thread and new threads are dynamically created by FUSE.
+	 */
 	pthread_ret = pthread_key_create(&interpKey, NULL);
 	if (pthread_ret != 0) {
 		fprintf(stderr, "Unable to create TSD key for Tcl.  Aborting.\n");
@@ -644,14 +766,25 @@ int main(int argc, char **argv) {
 		return(1);
 	}
 
+	/*
+	 * SQLite3 mode, for running raw SQL against the cache database
+	 */
 	if (argc == 3 && strcmp(argv[1], "-sqlite3") == 0) {
 		return(appfs_sqlite3(argv[2]));
 	}
 
+	/*
+	 * Tcl mode, for running raw Tcl in the same environment AppFSd would
+	 * run code.
+	 */
 	if (argc == 3 && strcmp(argv[1], "-tcl") == 0) {
 		return(appfs_tcl(argv[2]));
 	}
 
+	/*
+	 * Enter the FUSE main loop -- this will process any arguments
+	 * and start servicing requests.
+	 */
 	return(fuse_main(argc, argv, &appfs_oper, NULL));
 }
  
