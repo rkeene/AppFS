@@ -1,7 +1,5 @@
 #! /usr/bin/env bash
 
-set -x
-
 appfsd_options=()
 if [ "$1" == "--cachedir" ]; then
 	appfsd_options=("${appfsd_options[@]}" '--cachedir' "$2")
