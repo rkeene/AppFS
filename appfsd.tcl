@@ -4,6 +4,7 @@ package require http 2.7
 package require sqlite3
 package require sha1
 package require appfsd
+package require platform
 
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
@@ -398,7 +399,8 @@ namespace eval ::appfs {
 
 							set retval(package_sha1) [::appfs::db onecolumn {SELECT sha1 FROM packages WHERE hostname = $retval(hostname) AND os = $retval(os) AND cpuArch = $retval(cpu) AND version = $retval(version);}]
 							if {$retval(package_sha1) == ""} {
-								return [list]
+								set retval(_children) dead
+								return [array get retval]
 							}
 
 							if {$pathlen > 4} {
@@ -480,9 +482,48 @@ namespace eval ::appfs {
 		array set retval [list]
 
 		switch -- $pathinfo(_type) {
-			"toplevel" - "sites" - "packages" - "os-cpu" - "versions" {
+			"toplevel" {
 				set retval(type) directory
 				set retval(childcount) 2;
+			}
+			"sites" {
+				set check [::appfs::db onecolumn {SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname);}]
+				if {$check == "1"} {
+					set retval(type) directory
+					set retval(childcount) 2;
+				}
+			}
+			"packages" {
+				set check [::appfs::db onecolumn {SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package);}]
+				if {$check == "1"} {
+					set retval(type) directory
+					set retval(childcount) 2;
+				}
+			}
+			"os-cpu" {
+				if {$pathinfo(os) == "platform" && $pathinfo(cpu) == ""} {
+					set retval(type) symlink
+					set retval(source) [platform::generic]
+				} else {
+					set check [::appfs::db onecolumn {
+						SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package) AND os = $pathinfo(os) AND cpuArch = $pathinfo(cpu);
+					}]
+					if {$check == "1"} {
+						set retval(type) directory
+						set retval(childcount) 2;
+					}
+				}
+			}
+			"versions" {
+				if {$pathinfo(version) == "latest"} {
+					set retval(type) symlink
+					set retval(source) "1.0"
+				} else {
+					if {[info exists pathinfo(package_sha1)] && $pathinfo(package_sha1) != ""} {
+						set retval(type) directory
+						set retval(childcount) 2;
+					}
+				}
 			}
 			"files" {
 				set retval(packaged) 1
