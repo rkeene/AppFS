@@ -3,6 +3,7 @@
 package require http 2.7
 package require sqlite3
 package require sha1
+package require appfsd
 
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
@@ -340,56 +341,71 @@ namespace eval ::appfs {
 		return COMPLETE
 	}
 
+	proc _localpath {package hostname file} {
+		set homedir [::appfsd::get_homedir]
+		set dir [file join $homedir .appfs "./${package}@${hostname}" "./${file}"]
+	}
+
 	proc _parsepath {path} {
 		set path [string trim $path "/"]
 		set path [split $path "/"]
 		set pathlen [llength $path]
 
-		array set retval [list _children sites]
+		array set retval [list _children sites _type toplevel]
 
 		if {$pathlen > 0} {
 			set retval(hostname) [lindex $path 0]
 			set retval(_children) packages
+			set retval(_type) sites
 
 			if {$pathlen > 1} {
 				set package [lindex $path 1]
 				if {[string length $package] == "40" && [regexp {^[a-fA-F0-9]*$} $package]} {
 					set retval(package_sha1) $package
 					set retval(_children) files
+					set retval(_type) files
+
+					::appfs::db eval {SELECT package, os, cpuArch, version FROM packages WHERE sha1 = $retval(package_sha1);} pkginfo {}
+					set retval(package) $pkginfo(package)
+					set retval(os) $pkginfo(os)
+					set retval(cpu) $pkginfo(cpuArch)
+					set retval(version) $pkginfo(version)
 
 					if {$pathlen > 2} {
 						set retval(file) [join [lrange $path 2 end] "/"]
 					} else {
 						set retval(file) ""
 					}
-
-					return [array get retval]
 				} else {
 					set retval(package) $package
 					set retval(_children) os-cpu
-				}
+					set retval(_type) packages
 
-				if {$pathlen > 2} {
-					set os_cpu [lindex $path 2]
-					set os_cpu [split $os_cpu "-"]
+					if {$pathlen > 2} {
+						set os_cpu [lindex $path 2]
+						set os_cpu [split $os_cpu "-"]
 
-					set retval(os) [lindex $os_cpu 0]
-					set retval(cpu) [lindex $os_cpu 1]
-					set retval(_children) versions
+						set retval(os) [lindex $os_cpu 0]
+						set retval(cpu) [lindex $os_cpu 1]
+						set retval(_children) versions
+						set retval(_type) os-cpu
 
-					if {$pathlen > 3} {
-						set retval(version) [lindex $path 3]
-						set retval(_children) files
+						if {$pathlen > 3} {
+							set retval(version) [lindex $path 3]
+							set retval(_children) files
+							set retval(_type) versions
 
-						set retval(package_sha1) [::appfs::db onecolumn {SELECT sha1 FROM packages WHERE hostname = $retval(hostname) AND os = $retval(os) AND cpuArch = $retval(cpu) AND version = $retval(version);}]
-						if {$retval(package_sha1) == ""} {
-							return [list]
-						}
+							set retval(package_sha1) [::appfs::db onecolumn {SELECT sha1 FROM packages WHERE hostname = $retval(hostname) AND os = $retval(os) AND cpuArch = $retval(cpu) AND version = $retval(version);}]
+							if {$retval(package_sha1) == ""} {
+								return [list]
+							}
 
-						if {$pathlen > 4} {
-							set retval(file) [join [lrange $path 4 end] "/"]
-						} else {
-							set retval(file) ""
+							if {$pathlen > 4} {
+								set retval(_type) files
+								set retval(file) [join [lrange $path 4 end] "/"]
+							} else {
+								set retval(file) ""
+							}
 						}
 					}
 				}
@@ -414,19 +430,44 @@ namespace eval ::appfs {
 				return [::appfs::db eval {SELECT DISTINCT package FROM packages WHERE hostname = $pathinfo(hostname);}]
 			}
 			"os-cpu" {
-				return [::appfs::db eval {SELECT DISTINCT os || "-" || cpuArch FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package);}]
+				set retval [::appfs::db eval {SELECT DISTINCT os || "-" || cpuArch FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package);}]
+
+				lappend retval "platform"
+
+				return $retval
 			}
 			"versions" {
-				return [::appfs::db eval {
+				set retval [::appfs::db eval {
 					SELECT DISTINCT version FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package) AND os = $pathinfo(os) AND cpuArch = $pathinfo(cpu);
 				}]
+
+				lappend retval "latest"
+
+				return $retval
 			}
 			"files" {
 				catch {
 					::appfs::getpkgmanifest $pathinfo(hostname) $pathinfo(package_sha1)
 				}
 
-				return [::appfs::db eval {SELECT DISTINCT file_name FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $pathinfo(file);}]
+				set retval [::appfs::db eval {SELECT DISTINCT file_name FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $pathinfo(file);}]
+
+				if {[info exists pathinfo(package)] && [info exists pathinfo(hostname)] && [info exists pathinfo(file)]} {
+					set dir [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
+					foreach file [glob -nocomplain -tails -directory $dir -types {d f l} {{.,}*}] {
+						if {$file == "." || $file == ".."} {
+							continue
+						}
+
+						if {[lsearch -exact $retval $file] != -1} {
+							continue
+						}
+
+						lappend retval $file
+					}
+				}
+
+				return $retval
 			}
 		}
 
@@ -434,6 +475,57 @@ namespace eval ::appfs {
 	}
 
 	proc getattr {path} {
+		array set pathinfo [_parsepath $path]
+		array set retval [list]
+
+		switch -- $pathinfo(_type) {
+			"toplevel" - "sites" - "packages" - "os-cpu" - "versions" {
+				set retval(type) directory
+				set retval(childcount) 2;
+			}
+			"files" {
+				set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
+				if {[file exists $localpath]} {
+					catch {
+						file lstat $localpath localpathinfo
+						set retval(time) $localpathinfo(mtime)
+
+						switch -- $localpathinfo(type) {
+							"directory" {
+								set retval(type) "directory"
+								set retval(childcount) 2
+							}
+							"file" {
+								set retval(type) "file"
+								set retval(size) $localpathinfo(size)
+								if {[file executable $localpath]} {
+									set retval(perms) "x"
+								} else {
+									set retval(perms) ""
+								}
+							}
+							"link" {
+								set retval(type) "symlink"
+								set retval(source) [file readlink $localpath]
+							}
+						}
+					} err
+				} else {
+					set work [split $pathinfo(file) "/"]
+					set directory [join [lrange $work 0 end-1] "/"]
+					set file [lindex $work end]
+					::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
+					unset -nocomplain retval(*)
+				}
+
+			}
+		}
+
+		if {![info exists retval(type)]} {
+			return -code error "No such file or directory"
+		}
+
+		return [array get retval]
 	}
 
 	proc openpath {path mode} {

@@ -43,6 +43,7 @@ static pthread_key_t interpKey;
  */
 const char *appfs_cachedir;
 time_t appfs_boottime;
+int appfs_fuse_started = 0;
 
 /*
  * AppFS Path Type:  Describes the type of path a given file is
@@ -53,14 +54,6 @@ typedef enum {
 	APPFS_PATHTYPE_DIRECTORY,
 	APPFS_PATHTYPE_SYMLINK
 } appfs_pathtype_t;
-
-/*
- * AppFS Children Files linked-list
- */
-struct appfs_children {
-	struct appfs_children *_next;
-	char name[256];
-};
 
 /*
  * AppFS Path Information:
@@ -265,6 +258,10 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 static uid_t appfs_get_fsuid(void) {
 	struct fuse_context *ctx;
 
+	if (!appfs_fuse_started) {
+		return(getuid());
+	}
+
 	ctx = fuse_get_context();
 	if (ctx == NULL) {
 		/* Unable to lookup user for some reason */
@@ -377,20 +374,133 @@ static long long appfs_get_path_inode(const char *path) {
 }
 
 /* Get information about a path, and optionally list children */
-static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
+static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo) {
+	Tcl_Interp *interp;
+	Tcl_Obj *attrs_dict, *attr_value;
+	const char *attr_value_str;
+	Tcl_WideInt attr_value_wide;
+	int attr_value_int;
+	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL;
+	int tcl_ret;
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(1);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getattr", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(1);
+	}
+
+	if (attr_key_type == NULL) {
+		attr_key_type       = Tcl_NewStringObj("type", -1);
+		attr_key_perms      = Tcl_NewStringObj("perms", -1);
+		attr_key_size       = Tcl_NewStringObj("size", -1);
+		attr_key_time       = Tcl_NewStringObj("time", -1);
+		attr_key_source     = Tcl_NewStringObj("source", -1);
+		attr_key_childcount = Tcl_NewStringObj("childcount", -1);
+	}
+
+	attrs_dict = Tcl_GetObjResult(interp);
+	tcl_ret = Tcl_DictObjGet(interp, attrs_dict, attr_key_type, &attr_value);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("[dict get \"type\"] failed");
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(1);
+	}
+
+	if (attr_value == NULL) {
+		return(1);
+	}
+
+	pathinfo->packaged = 0;
+
+	attr_value_str = Tcl_GetString(attr_value);
+	switch (attr_value_str[0]) {
+		case 'd': /* directory */
+			pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+			pathinfo->typeinfo.dir.childcount = 0;
+
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_childcount, &attr_value);
+			if (attr_value != NULL) {
+				tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+				if (tcl_ret == TCL_OK) {
+					pathinfo->typeinfo.dir.childcount = attr_value_wide;
+				}
+			}
+
+			break;
+		case 'f': /* file */
+			pathinfo->type = APPFS_PATHTYPE_FILE;
+			pathinfo->typeinfo.file.size = 0;
+			pathinfo->typeinfo.file.executable = 0;
+
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_size, &attr_value);
+			if (attr_value != NULL) {
+				tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+				if (tcl_ret == TCL_OK) {
+					pathinfo->typeinfo.file.size = attr_value_wide;
+				}
+			}
+
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_perms, &attr_value);
+			if (attr_value != NULL) {
+				attr_value_str = Tcl_GetString(attr_value);
+				if (attr_value_str[0] == 'x') {
+					pathinfo->typeinfo.file.executable = 1;
+				}
+			}
+			break;
+		case 's': /* symlink */
+			pathinfo->type = APPFS_PATHTYPE_SYMLINK;
+			pathinfo->typeinfo.symlink.size = 0;
+			pathinfo->typeinfo.symlink.source[0] = '\0';
+
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_source, &attr_value);
+			if (attr_value != NULL) {
+				attr_value_str = Tcl_GetStringFromObj(attr_value, &attr_value_int); 
+
+				if ((attr_value_int + 1) <= sizeof(pathinfo->typeinfo.symlink.source)) {
+					pathinfo->typeinfo.symlink.size = attr_value_int;
+					pathinfo->typeinfo.symlink.source[attr_value_int] = '\0';
+
+					memcpy(pathinfo->typeinfo.symlink.source, attr_value_str, attr_value_int);
+				}
+			}
+			break;
+		default:
+			return(1);
+	}
+
+	Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
+	if (attr_value != NULL) {
+		tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+		if (tcl_ret == TCL_OK) {
+			pathinfo->time = attr_value_wide;
+		}
+	} else {
+		pathinfo->time = 0;
+	}
+
+	return(0);
 }
 
 static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
 	struct appfs_pathinfo pathinfo;
-	int res = 0;
+	int retval = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
 	pathinfo.type = APPFS_PATHTYPE_INVALID;
 
-	res = appfs_get_path_info(path, &pathinfo, NULL);
-	if (res != 0) {
-		return(res);
+	retval = appfs_get_path_info(path, &pathinfo);
+	if (retval != 0) {
+		return(retval);
 	}
 
 	if (pathinfo.type != APPFS_PATHTYPE_SYMLINK) {
@@ -408,12 +518,18 @@ static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
 
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	struct appfs_pathinfo pathinfo;
-	int res = 0;
+	int retval;
+
+	retval = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	pathinfo.type = APPFS_PATHTYPE_DIRECTORY;
-	pathinfo.typeinfo.dir.childcount = 0;
+	pathinfo.type = APPFS_PATHTYPE_INVALID;
+
+	retval = appfs_get_path_info(path, &pathinfo);
+	if (retval != 0) {
+		return(retval);
+	}
 
 	memset(stbuf, 0, sizeof(struct stat));
 
@@ -444,7 +560,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			stbuf->st_size = pathinfo.typeinfo.symlink.size;
 			break;
 		case APPFS_PATHTYPE_INVALID:
-			res = -EIO;
+			retval = -EIO;
 
 			break;
 	}
@@ -455,7 +571,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 		}
 	}
 
-	return res;
+	return(retval);
 }
 
 static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
@@ -474,7 +590,6 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
-
 
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getchildren", path);
 	if (tcl_ret != TCL_OK) {
@@ -767,6 +882,7 @@ int main(int argc, char **argv) {
 	 * Enter the FUSE main loop -- this will process any arguments
 	 * and start servicing requests.
 	 */
+	appfs_fuse_started = 1;
 	return(fuse_main(args.argc, args.argv, &appfs_operations, NULL));
 }
  
