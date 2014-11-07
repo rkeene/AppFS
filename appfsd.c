@@ -380,7 +380,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	const char *attr_value_str;
 	Tcl_WideInt attr_value_wide;
 	int attr_value_int;
-	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL;
+	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL, *attr_key_packaged = NULL;
 	int tcl_ret;
 
 	interp = appfs_TclInterp();
@@ -403,6 +403,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		attr_key_time       = Tcl_NewStringObj("time", -1);
 		attr_key_source     = Tcl_NewStringObj("source", -1);
 		attr_key_childcount = Tcl_NewStringObj("childcount", -1);
+		attr_key_packaged   = Tcl_NewStringObj("packaged", -1);
 	}
 
 	attrs_dict = Tcl_GetObjResult(interp);
@@ -476,6 +477,11 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 			break;
 		default:
 			return(-EIO);
+	}
+
+	Tcl_DictObjGet(interp, attrs_dict, attr_key_packaged, &attr_value);
+	if (attr_value != NULL) {
+		pathinfo->packaged = 1;
 	}
 
 	Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
@@ -567,9 +573,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	}
 
 	if (pathinfo.packaged) {
-		if (0) {
-			stbuf->st_mode |= 0222;
-		}
+		stbuf->st_mode |= 0222;
 	}
 
 	return(retval);
@@ -702,6 +706,22 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 	return(read_ret);
 }
 
+static int appfs_fuse_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+	off_t lseek_ret;
+	ssize_t write_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	lseek_ret = lseek(fi->fh, offset, SEEK_SET);
+	if (lseek_ret != offset) {
+		return(-EIO);
+	}
+
+	write_ret = write(fi->fh, buf, size);
+
+	return(write_ret);
+}
+
 /*
  * SQLite3 mode: Execute raw SQL and return success or failure
  */
@@ -792,7 +812,8 @@ static struct fuse_operations appfs_operations = {
 	.readlink  = appfs_fuse_readlink,
 	.open      = appfs_fuse_open,
 	.release   = appfs_fuse_close,
-	.read      = appfs_fuse_read
+	.read      = appfs_fuse_read,
+	.write     = appfs_fuse_write
 };
 
 /*

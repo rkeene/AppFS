@@ -485,6 +485,8 @@ namespace eval ::appfs {
 				set retval(childcount) 2;
 			}
 			"files" {
+				set retval(packaged) 1
+
 				set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
 				if {[file exists $localpath]} {
 					catch {
