@@ -1,18 +1,82 @@
 #! /usr/bin/env bash
 
+function invalidate() {
+	appfsd -sqlite3 'UPDATE sites SET ttl = "0";'
+}
+
+function remove_site() {
+	local site
+
+	site="$1"
+
+	appfsd -sqlite3 'DELETE FROM sites WHERE hostname = '"'$site'"'; DELETE FROM packages WHERE hostname = '"'$site'"';' || return 1
+
+	clean
+}
+
+function clean() {
+	appfsd -tcl "$(cat <<\_EOF_
+		unset -nocomplain row
+		::appfs::db eval {SELECT sha1, hostname FROM packages;} row {
+			set hostname [::appfs::db onecolumn {SELECT hostname FROM sites WHERE hostname = $row(hostname) LIMIT 1;}]
+			if {$hostname == ""} {
+				continue
+			}
+
+			set valid_sha1($row(sha1)) 1
+			::appfs::db eval {SELECT file_sha1 FROM files WHERE file_sha1 IS NOT NULL AND file_sha1 != '' AND package_sha1 = $row(sha1);} subrow {
+				set valid_sha1($subrow(file_sha1)) 1
+			}
+		}
+
+		foreach file [glob -nocomplain -tails -directory $::appfs::cachedir {[0-9a-f][0-9a-f]/*/*/*/*}] {
+			set sha1 [string map [list "/" "" "\\" ""] $file]
+			set file [file join $::appfs::cachedir $file]
+
+			if {[info exists valid_sha1($sha1)]} {
+				continue
+			}
+
+			puts "Cleaning $file"
+			file delete -force -- $file
+		}
+_EOF_
+	)"
+}
+
+function clear() {
+	local package
+
+	package="$1"
+
+	if [ -n "${package}" ]; then
+		echo "not implemented" >&2
+
+		return 1
+	fi
+
+	appfsd -tcl 'file delete -force -- {*}[glob -directory $::appfs::cachedir {[0-9a-f][0-9a-f]}]' || return 1
+	appfsd -sqlite3 'DELETE FROM sites; DELETE FROM packages; DELETE FROM files; VACUUM;' || return 1
+}
+
 case "$1" in
 	invalidate)
-		statement='UPDATE sites SET ttl = "0";'
+		invalidate || exit 1
+		;;
+	remove-site)
+		remove_site "$2" || exit 1
+		;;
+	clean)
+		clean || exit 1
 		;;
 	clear)
-		rm -rf 
-		statement='DELETE FROM sites; DELETE FROM packages; DELETE FROM files;'
+		clear "$2" || exit 1
 		;;
 	*)
-		echo "Usage: appfs-cache {invalidate|clear}" >&2
+		echo "Usage: appfs-cache {invalidate|clean|clear|clear <package>|remove-site <site>}" >&2
 
 		exit 1
 		;;
 esac
 
-exec appfsd -sqlite3 "${statement}"
+exit 0
