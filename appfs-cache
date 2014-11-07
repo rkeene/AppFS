@@ -1,7 +1,20 @@
 #! /usr/bin/env bash
 
+set -x
+
+appfsd_options=()
+if [ "$1" == "--cachedir" ]; then
+	appfsd_options=("${appfsd_options[@]}" '--cachedir' "$2")
+
+	shift; shift;
+fi
+
+function call_appfsd() {
+	appfsd "${appfsd_options[@]}" "$@"
+}
+
 function invalidate() {
-	appfsd -sqlite3 'UPDATE sites SET ttl = "0";'
+	call_appfsd --sqlite3 'UPDATE sites SET ttl = "0";'
 }
 
 function remove_site() {
@@ -9,13 +22,13 @@ function remove_site() {
 
 	site="$1"
 
-	appfsd -sqlite3 'DELETE FROM sites WHERE hostname = '"'$site'"'; DELETE FROM packages WHERE hostname = '"'$site'"';' || return 1
+	call_appfsd --sqlite3 'DELETE FROM sites WHERE hostname = '"'$site'"'; DELETE FROM packages WHERE hostname = '"'$site'"';' || return 1
 
 	clean
 }
 
 function clean() {
-	appfsd -tcl "$(cat <<\_EOF_
+	call_appfsd --tcl "$(cat <<\_EOF_
 		unset -nocomplain row
 		::appfs::db eval {SELECT sha1, hostname FROM packages;} row {
 			set hostname [::appfs::db onecolumn {SELECT hostname FROM sites WHERE hostname = $row(hostname) LIMIT 1;}]
@@ -55,8 +68,8 @@ function clear() {
 		return 1
 	fi
 
-	appfsd -tcl 'file delete -force -- {*}[glob -directory $::appfs::cachedir {[0-9a-f][0-9a-f]}]' || return 1
-	appfsd -sqlite3 'DELETE FROM sites; DELETE FROM packages; DELETE FROM files; VACUUM;' || return 1
+	call_appfsd --tcl 'file delete -force -- {*}[glob -directory $::appfs::cachedir {[0-9a-f][0-9a-f]}]' || return 1
+	call_appfsd --sqlite3 'DELETE FROM sites; DELETE FROM packages; DELETE FROM files; VACUUM;' || return 1
 }
 
 case "$1" in

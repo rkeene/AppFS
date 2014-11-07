@@ -728,17 +728,42 @@ static struct fuse_operations appfs_operations = {
 };
 
 /*
+ * FUSE option parsing callback
+ */
+static int appfs_fuse_opt_cb(void *data, const char *arg, int key, struct fuse_args *outargs) {
+	static seen_cachedir = 0;
+
+	if (key == FUSE_OPT_KEY_NONOPT && seen_cachedir == 0) {
+		seen_cachedir = 1;
+
+		globalThread.cachedir = strdup(arg);
+
+		return(0);
+	}
+
+	return(1);
+}
+
+/*
  * Entry point into this program.
  */
 int main(int argc, char **argv) {
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-	const char *cachedir = APPFS_CACHEDIR;
 	int pthread_ret;
+
+	/*
+	 * Skip passed program name
+	 */
+	if (argc == 0 || argv == NULL) {
+		return(1);
+	}
+	argc--;
+	argv++;
 
 	/*
 	 * Set global variables, these should be configuration options.
 	 */
-	globalThread.cachedir = cachedir;
+	globalThread.cachedir = APPFS_CACHEDIR;
 	globalThread.options.writable = 1;
 
 	/*
@@ -768,24 +793,36 @@ int main(int argc, char **argv) {
 	}
 
 	/*
+	 * Manually specify cache directory, without FUSE callback
+	 */
+	if (argc >= 2) {
+		if (strcmp(argv[0], "--cachedir") == 0) {
+			globalThread.cachedir = strdup(argv[1]);
+
+			argc -= 2;
+			argv += 2;
+		}
+	}
+
+	/*
 	 * SQLite3 mode, for running raw SQL against the cache database
 	 */
-	if (argc == 3 && strcmp(argv[1], "-sqlite3") == 0) {
-		return(appfs_sqlite3(argv[2]));
+	if (argc == 2 && strcmp(argv[0], "--sqlite3") == 0) {
+		return(appfs_sqlite3(argv[1]));
 	}
 
 	/*
 	 * Tcl mode, for running raw Tcl in the same environment AppFSd would
 	 * run code.
 	 */
-	if (argc == 3 && strcmp(argv[1], "-tcl") == 0) {
-		return(appfs_tcl(argv[2]));
+	if (argc == 2 && strcmp(argv[0], "--tcl") == 0) {
+		return(appfs_tcl(argv[1]));
 	}
 
 	/*
 	 * Add FUSE arguments which we always supply
 	 */
-	fuse_opt_parse(&args, NULL, NULL, NULL);
+	fuse_opt_parse(&args, NULL, NULL, appfs_fuse_opt_cb);
 	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=60,attr_timeout=3600,intr,big_writes");
 
 	if (getuid() == 0) {
