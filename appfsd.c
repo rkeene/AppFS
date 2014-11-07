@@ -147,11 +147,25 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 		return(NULL);
 	}
 
-	Tcl_HideCommand(interp, "glob", "glob");
-	Tcl_HideCommand(interp, "exec", "exec");
-	Tcl_HideCommand(interp, "pid", "pid");
 	Tcl_HideCommand(interp, "auto_load_index", "auto_load_index");
 	Tcl_HideCommand(interp, "unknown", "unknown");
+
+	return(interp);
+}
+
+static Tcl_Interp *appfs_TclInterp(void) {
+	Tcl_Interp *interp;
+
+	interp = pthread_getspecific(interpKey);
+	if (interp == NULL) {
+		interp = appfs_create_TclInterp();
+
+		if (interp == NULL) {
+			return(NULL);
+		}
+
+		pthread_setspecific(interpKey, interp);
+	}
 
 	return(interp);
 }
@@ -200,15 +214,9 @@ static void appfs_update_index(const char *hostname) {
 
 	APPFS_DEBUG("Enter: hostname = %s", hostname);
 
-	interp = pthread_getspecific(interpKey);
+	interp = appfs_TclInterp();
 	if (interp == NULL) {
-		interp = appfs_create_TclInterp();
-
-		if (interp == NULL) {
-			return;
-		}
-
-		pthread_setspecific(interpKey, interp);
+		return;
 	}
 
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getindex", hostname);
@@ -226,15 +234,9 @@ static const char *appfs_getfile(const char *hostname, const char *sha1) {
 	char *retval;
 	int tcl_ret;
 
-	interp = pthread_getspecific(interpKey);
+	interp = appfs_TclInterp();
 	if (interp == NULL) {
-		interp = appfs_create_TclInterp();
-
-		if (interp == NULL) {
-			return(NULL);
-		}
-
-		pthread_setspecific(interpKey, interp);
+		return(NULL);
 	}
 
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::download", hostname, sha1);
@@ -253,15 +255,9 @@ static void appfs_update_manifest(const char *hostname, const char *sha1) {
 	Tcl_Interp *interp;
 	int tcl_ret;
 
-	interp = pthread_getspecific(interpKey);
+	interp = appfs_TclInterp();
 	if (interp == NULL) {
-		interp = appfs_create_TclInterp();
-
-		if (interp == NULL) {
-			return;
-		}
-
-		pthread_setspecific(interpKey, interp);
+		return;
 	}
 
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::getpkgmanifest", hostname, sha1);
@@ -279,6 +275,8 @@ static uid_t appfs_get_fsuid(void) {
 
 	ctx = fuse_get_context();
 	if (ctx == NULL) {
+		/* Unable to lookup user for some reason */
+		/* Return an unprivileged user ID */
 		return(1);
 	}
 
@@ -351,15 +349,6 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
 	free(homedir);
 
         return(TCL_OK);
-}
-
-static struct appfs_children *appfs_getchildren(const char *hostname, const char *package_hash, const char *path, int *children_count_p) {
-}
-
-static char *appfs_lookup_package_hash(const char *hostname, const char *package, const char *os, const char *cpuArch, const char *version) {
-}
-
-static int appfs_getfileinfo(const char *hostname, const char *package_hash, const char *_path, struct appfs_pathinfo *pathinfo) {
 }
 
 /* Generate an inode for a given path */
@@ -579,7 +568,37 @@ static int appfs_sqlite3(const char *sql) {
 		return(1);
 	}
 
-	printf("%s\n", sql_ret);
+	if (sql_ret && sql_ret[0] != '\0') {
+		printf("%s\n", sql_ret);
+	}
+
+	return(0);
+}
+
+static int appfs_tcl(const char *tcl) {
+	Tcl_Interp *interp;
+	const char *tcl_result;
+	int tcl_ret;
+
+	interp = appfs_create_TclInterp();
+	if (interp == NULL) {
+		fprintf(stderr, "Unable to create a Tcl interpreter.  Aborting.\n");
+
+		return(1);
+	}
+
+	tcl_ret = Tcl_Eval(interp, tcl);
+	tcl_result = Tcl_GetStringResult(interp);
+
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "[error] %s\n", tcl_result);
+
+		return(1);
+	}
+
+	if (tcl_result && tcl_result[0] != '\0') {
+		printf("%s\n", tcl_result);
+	}
 
 	return(0);
 }
@@ -627,6 +646,10 @@ int main(int argc, char **argv) {
 
 	if (argc == 3 && strcmp(argv[1], "-sqlite3") == 0) {
 		return(appfs_sqlite3(argv[2]));
+	}
+
+	if (argc == 3 && strcmp(argv[1], "-tcl") == 0) {
+		return(appfs_tcl(argv[2]));
 	}
 
 	return(fuse_main(argc, argv, &appfs_oper, NULL));
