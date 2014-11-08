@@ -1,12 +1,10 @@
 CC = gcc
 PKG_CONFIG = pkg-config
 FUSE_CFLAGS = $(shell $(PKG_CONFIG) --cflags fuse)
-SQLITE3_CFLAGS = $(shell $(PKG_CONFIG) --cflags sqlite3)
-CFLAGS = -Wall $(FUSE_CFLAGS) $(SQLITE3_CFLAGS) $(TCL_CFLAGS) -DDEBUG=1
+CFLAGS = -Wall $(FUSE_CFLAGS) $(TCL_CFLAGS) -DDEBUG=1
 LDFLAGS = $(TCL_LDFLAGS)
 FUSE_LIBS = $(shell $(PKG_CONFIG) --libs fuse)
-SQLITE3_LIBS = $(shell $(PKG_CONFIG) --libs sqlite3)
-LIBS = $(FUSE_LIBS) $(SQLITE3_LIBS) $(TCL_LIBS)
+LIBS = $(FUSE_LIBS) $(TCL_LIBS)
 PREFIX = /usr/local
 prefix = $(PREFIX)
 bindir = $(prefix)/bin
