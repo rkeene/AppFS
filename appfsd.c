@@ -557,6 +557,32 @@ static char *appfs_prepare_to_create(const char *path) {
 	return(strdup(real_path));
 }
 
+static char *appfs_localpath(const char *path) {
+	Tcl_Interp *interp;
+	const char *real_path;
+	int tcl_ret;
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(NULL);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::localpath", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::localpath(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(NULL);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
+	if (real_path == NULL) {
+		return(NULL);
+	}
+
+	return(strdup(real_path));
+}
+
 static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
 	struct appfs_pathinfo pathinfo;
 	int retval = 0;
@@ -835,6 +861,26 @@ static int appfs_fuse_create(const char *path, mode_t mode, struct fuse_file_inf
 	return(fd);
 }
 
+static int appfs_fuse_truncate(const char *path, off_t size) {
+	char *real_path;
+	int truncate_ret;
+
+	real_path = appfs_localpath(path);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	truncate_ret = truncate(real_path, size);
+
+	free(real_path);
+
+	if (truncate_ret != 0) {
+		return(errno * -1);
+	}
+
+	return(truncate_ret);
+}
+
 /*
  * SQLite3 mode: Execute raw SQL and return success or failure
  */
@@ -929,6 +975,7 @@ static struct fuse_operations appfs_operations = {
 	.write     = appfs_fuse_write,
 	.mknod     = appfs_fuse_mknod,
 	.create    = appfs_fuse_create,
+	.truncate  = appfs_fuse_truncate,
 };
 
 /*

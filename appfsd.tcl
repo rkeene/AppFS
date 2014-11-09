@@ -668,4 +668,30 @@ namespace eval ::appfs {
 
 		return $filename
 	}
+
+	proc prepare_to_create {path} {
+		if {[exists $path] != ""} {
+			return -code error "File already exists"
+		}
+
+		set filename [openpath $path "create"]
+
+		set dirname [file dirname $filename]
+
+		file mkdir $dirname
+
+		return $filename
+	}
+
+	proc localpath {path} {
+		array set pathinfo [_parsepath $path]
+
+		if {$pathinfo(_type) != "files"} {
+			return -code error "invalid type"
+		}
+
+		set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
+
+		return $localpath
+	}
 }
