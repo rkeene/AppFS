@@ -84,7 +84,7 @@ struct appfs_pathinfo {
 /*
  * Create a new Tcl interpreter and completely initialize it
  */
-static Tcl_Interp *appfs_create_TclInterp(void) {
+static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	Tcl_Interp *interp;
 	int tcl_ret;
 
@@ -94,6 +94,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 	if (interp == NULL) {
 		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
 
+		if (error_string) {
+			*error_string = strdup("Unable to create Tcl interpreter.");
+		}
+
 		return(NULL);
 	}
 
@@ -101,6 +105,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
 
 		Tcl_DeleteInterp(interp);
 
@@ -112,6 +120,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 		fprintf(stderr, "Unable to initialize Tcl SHA1.  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
@@ -121,6 +133,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS Package.  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
 
 		Tcl_DeleteInterp(interp);
 
@@ -139,6 +155,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
@@ -149,6 +169,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 	 */
 	if (Tcl_SetVar(interp, "::appfs::cachedir", appfs_cachedir, TCL_GLOBAL_ONLY) == NULL) {
 		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
 
 		Tcl_DeleteInterp(interp);
 
@@ -163,6 +187,10 @@ static Tcl_Interp *appfs_create_TclInterp(void) {
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
 
 		Tcl_DeleteInterp(interp);
 
@@ -191,7 +219,7 @@ static Tcl_Interp *appfs_TclInterp(void) {
 
 	interp = pthread_getspecific(interpKey);
 	if (interp == NULL) {
-		interp = appfs_create_TclInterp();
+		interp = appfs_create_TclInterp(NULL);
 
 		if (interp == NULL) {
 			return(NULL);
@@ -734,7 +762,7 @@ static int appfs_sqlite3(const char *sql) {
 	const char *sql_ret;
 	int tcl_ret;
 
-	interp = appfs_create_TclInterp();
+	interp = appfs_create_TclInterp(NULL);
 	if (interp == NULL) {
 		fprintf(stderr, "Unable to create a Tcl interpreter.  Aborting.\n");
 
@@ -765,7 +793,7 @@ static int appfs_tcl(const char *tcl) {
 	const char *tcl_result;
 	int tcl_ret;
 
-	interp = appfs_create_TclInterp();
+	interp = appfs_create_TclInterp(NULL);
 	if (interp == NULL) {
 		fprintf(stderr, "Unable to create a Tcl interpreter.  Aborting.\n");
 
@@ -841,6 +869,8 @@ static int appfs_fuse_opt_cb(void *data, const char *arg, int key, struct fuse_a
  * Entry point into this program.
  */
 int main(int argc, char **argv) {
+	Tcl_Interp *test_interp;
+	char *test_interp_error;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	int pthread_ret;
 
@@ -923,6 +953,23 @@ int main(int argc, char **argv) {
 		fuse_opt_parse(&args, NULL, NULL, NULL);
 		fuse_opt_add_arg(&args, "-oallow_other");
 	}
+
+	/*
+	 * Create a Tcl interpreter just to verify that things are in working 
+	 * order before we become a daemon.
+	 */
+	test_interp = appfs_create_TclInterp(&test_interp_error);
+	if (test_interp == NULL) {
+		if (test_interp_error == NULL) {
+			test_interp_error = "Unknown error";
+		}
+
+		fprintf(stderr, "Unable to initialize Tcl interpreter for AppFSd:\n");
+		fprintf(stderr, "%s", test_interp_error);
+
+		return(1);
+	}
+	Tcl_DeleteInterp(test_interp);
 
 	/*
 	 * Enter the FUSE main loop -- this will process any arguments
