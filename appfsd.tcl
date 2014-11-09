@@ -609,7 +609,8 @@ namespace eval ::appfs {
 		if {$mode == "write"} {
 			set tmplocalpath "${localpath}.[expr rand()][clock clicks]"
 
-			catch {
+			set failed 0
+			if {[catch {
 				file mkdir [file dirname $localpath]
 				file copy -force -- $localcachefile $tmplocalpath
 
@@ -618,9 +619,15 @@ namespace eval ::appfs {
 				}
 
 				file rename -force -- $tmplocalpath $localpath
+			} err]} {
+				set failed 1
 			}
 			catch {
 				file delete -force -- $tmplocalpath
+			}
+
+			if {$failed} {
+				return -code error $err
 			}
 
 			return $localpath
