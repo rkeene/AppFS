@@ -818,6 +818,8 @@ static int appfs_fuse_mknod(const char *path, mode_t mode, dev_t device) {
 	char *real_path;
 	int mknod_ret;
 
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
 	if ((mode & S_IFCHR) == S_IFCHR) {
 		return(-EPERM);
 	}
@@ -846,6 +848,8 @@ static int appfs_fuse_create(const char *path, mode_t mode, struct fuse_file_inf
 	int fd;
 	int chmod_ret;
 
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
 	fd = appfs_fuse_open(path, fi);
 	if (fd < 0) {
 		return(fd);
@@ -865,6 +869,8 @@ static int appfs_fuse_truncate(const char *path, off_t size) {
 	char *real_path;
 	int truncate_ret;
 
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
 	real_path = appfs_localpath(path);
 	if (real_path == NULL) {
 		return(-EIO);
@@ -878,7 +884,53 @@ static int appfs_fuse_truncate(const char *path, off_t size) {
 		return(errno * -1);
 	}
 
-	return(truncate_ret);
+	return(0);
+}
+
+static int appfs_fuse_unlink_rmdir(const char *path) {
+	Tcl_Interp *interp;
+	int tcl_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(-EIO);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::unlinkpath", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::unlinkpath(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(-EIO);
+	}
+
+	return(0);
+}
+
+static int appfs_fuse_mkdir(const char *path, mode_t mode) {
+	char *real_path;
+	int mkdir_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	real_path = appfs_prepare_to_create(path);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	mkdir_ret = mkdir(real_path, mode);
+
+	free(real_path);
+
+	if (mkdir_ret != 0) {
+		if (errno != EEXIST) {
+			return(errno * -1);
+		}
+	}
+
+	return(0);
 }
 
 /*
@@ -976,6 +1028,9 @@ static struct fuse_operations appfs_operations = {
 	.mknod     = appfs_fuse_mknod,
 	.create    = appfs_fuse_create,
 	.truncate  = appfs_fuse_truncate,
+	.unlink    = appfs_fuse_unlink_rmdir,
+	.rmdir     = appfs_fuse_unlink_rmdir,
+	.mkdir     = appfs_fuse_mkdir,
 };
 
 /*

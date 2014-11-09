@@ -462,6 +462,15 @@ namespace eval ::appfs {
 							continue
 						}
 
+						if {[string match "*.APPFS.WHITEOUT" $file]} {
+							set remove [string range $file 0 end-15]
+							set idx [lsearch -exact $retval $remove]
+							if {$idx != -1} {
+								set retval [lreplace $retval $idx $idx]
+							}
+							continue
+						}
+
 						if {[lsearch -exact $retval $file] != -1} {
 							continue
 						}
@@ -531,44 +540,48 @@ namespace eval ::appfs {
 				}
 			}
 			"files" {
-
 				set retval(packaged) 1
 
 				set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
 
 				set retval(localpath) $localpath
 
-				if {[file exists $localpath]} {
-					catch {
-						file lstat $localpath localpathinfo
-						set retval(time) $localpathinfo(mtime)
+				if {![file exists "${localpath}.APPFS.WHITEOUT"]} {
+					if {[file exists $localpath]} {
+						set retval(is_localfile) 1
+						catch {
+							file lstat $localpath localpathinfo
+							set retval(time) $localpathinfo(mtime)
 
-						switch -- $localpathinfo(type) {
-							"directory" {
-								set retval(type) "directory"
-								set retval(childcount) 2
-							}
-							"file" {
-								set retval(type) "file"
-								set retval(size) $localpathinfo(size)
-								if {[file executable $localpath]} {
-									set retval(perms) "x"
-								} else {
-									set retval(perms) ""
+							switch -- $localpathinfo(type) {
+								"directory" {
+									set retval(type) "directory"
+									set retval(childcount) 2
+								}
+								"file" {
+									set retval(type) "file"
+									set retval(size) $localpathinfo(size)
+									if {[file executable $localpath]} {
+										set retval(perms) "x"
+									} else {
+										set retval(perms) ""
+									}
+								}
+								"link" {
+									set retval(type) "symlink"
+									set retval(source) [file readlink $localpath]
 								}
 							}
-							"link" {
-								set retval(type) "symlink"
-								set retval(source) [file readlink $localpath]
-							}
-						}
-					} err
-				} else {
-					set work [split $pathinfo(file) "/"]
-					set directory [join [lrange $work 0 end-1] "/"]
-					set file [lindex $work end]
-					::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
-					unset -nocomplain retval(*)
+						} err
+					} else {
+						set retval(is_remotefile) 1
+
+						set work [split $pathinfo(file) "/"]
+						set directory [join [lrange $work 0 end-1] "/"]
+						set file [lindex $work end]
+						::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
+						unset -nocomplain retval(*)
+					}
 				}
 
 			}
@@ -590,11 +603,13 @@ namespace eval ::appfs {
 
 		set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
 
-		if {[file exists $localpath]} {
+		if {$mode == "create"} {
+			file delete -- "${localpath}.APPFS.WHITEOUT"
+
 			return $localpath
 		}
 
-		if {$mode == "create"} {
+		if {[file exists $localpath]} {
 			return $localpath
 		}
 
@@ -669,20 +684,6 @@ namespace eval ::appfs {
 		return $filename
 	}
 
-	proc prepare_to_create {path} {
-		if {[exists $path] != ""} {
-			return -code error "File already exists"
-		}
-
-		set filename [openpath $path "create"]
-
-		set dirname [file dirname $filename]
-
-		file mkdir $dirname
-
-		return $filename
-	}
-
 	proc localpath {path} {
 		array set pathinfo [_parsepath $path]
 
@@ -693,5 +694,69 @@ namespace eval ::appfs {
 		set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
 
 		return $localpath
+	}
+
+	proc _delete_files_except_whiteout {path} {
+		foreach file [glob -nocomplain -directory $path {{.,}*}] {
+			if {[string match "*/.." $file] || [string match "*/." $file]} {
+				continue
+			}
+
+			if {[file isdirectory $file]} {
+				_delete_files_except_whiteout $file
+			}
+
+			if {[string match "*.APPFS.WHITEOUT" $file]} {
+				continue
+			}
+
+			catch {
+				file delete -- $file
+			}
+		}
+	}
+
+	proc unlinkpath {path} {
+		array set pathattrs [exists $path]
+
+		if {![info exists pathattrs(packaged)]} {
+			return -code error "invalid type"
+		}
+
+		set localpath $pathattrs(localpath)
+
+		set whiteout 0
+		set isdirectory 0
+		if {[info exists pathattrs(is_localfile)]} {
+			if {[file isdirectory $localpath]} {
+				set isdirectory 1
+				set whiteout 1
+				_delete_files_except_whiteout $localpath
+			} else {
+				file delete -force -- $localpath
+			}
+		} elseif {[info exists pathattrs(is_remotefile)]} {
+			if {$pathattrs(type) == "directory"} {
+				set isdirectory 1
+			}
+
+			set whiteout 1
+		} else {
+			return -code error "Unknown if file is remote or local !?"
+		}
+
+		if {$isdirectory} {
+			set children [getchildren $path]
+			if {$children != [list]} {
+				return -code error "Asked to delete non-empty directory"
+			}
+		}
+
+		if {$whiteout} {
+			set whiteoutfile "${localpath}.APPFS.WHITEOUT"
+			set whiteoutdir [file dirname $whiteoutfile]
+			file mkdir $whiteoutdir
+			close [open $whiteoutfile w]
+		}
 	}
 }
