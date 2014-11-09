@@ -610,6 +610,7 @@ namespace eval ::appfs {
 			set tmplocalpath "${localpath}.[expr rand()][clock clicks]"
 
 			catch {
+				file mkdir [file dirname $localpath]
 				file copy -force -- $localcachefile $tmplocalpath
 
 				if {$pkgpathinfo(perms) == "x"} {
