@@ -52,7 +52,9 @@ typedef enum {
 	APPFS_PATHTYPE_INVALID,
 	APPFS_PATHTYPE_FILE,
 	APPFS_PATHTYPE_DIRECTORY,
-	APPFS_PATHTYPE_SYMLINK
+	APPFS_PATHTYPE_SYMLINK,
+	APPFS_PATHTYPE_SOCKET,
+	APPFS_PATHTYPE_FIFO,
 } appfs_pathtype_t;
 
 /*
@@ -503,6 +505,10 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				}
 			}
 			break;
+		case 'p': /* pipe/fifo */
+			break;
+		case 'S': /* UNIX domain socket */
+			break;
 		default:
 			return(-EIO);
 	}
@@ -523,6 +529,32 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	}
 
 	return(0);
+}
+
+static char *appfs_prepare_to_create(const char *path) {
+	Tcl_Interp *interp;
+	const char *real_path;
+	int tcl_ret;
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(NULL);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::prepare_to_create", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::prepare_to_create(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(NULL);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
+	if (real_path == NULL) {
+		return(NULL);
+	}
+
+	return(strdup(real_path));
 }
 
 static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
@@ -594,8 +626,10 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			stbuf->st_nlink = 1;
 			stbuf->st_size = pathinfo.typeinfo.symlink.size;
 			break;
+		case APPFS_PATHTYPE_SOCKET:
+		case APPFS_PATHTYPE_FIFO:
 		case APPFS_PATHTYPE_INVALID:
-			retval = -EIO;
+			retval = -ENOENT;
 
 			break;
 	}
@@ -754,6 +788,53 @@ static int appfs_fuse_write(const char *path, const char *buf, size_t size, off_
 	return(write_ret);
 }
 
+static int appfs_fuse_mknod(const char *path, mode_t mode, dev_t device) {
+	char *real_path;
+	int mknod_ret;
+
+	if ((mode & S_IFCHR) == S_IFCHR) {
+		return(-EPERM);
+	}
+
+	if ((mode & S_IFBLK) == S_IFBLK) {
+		return(-EPERM);
+	}
+
+	real_path = appfs_prepare_to_create(path);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	mknod_ret = mknod(real_path, mode, device);
+
+	free(real_path);
+
+	if (mknod_ret != 0) {
+		return(errno * -1);
+	}
+
+	return(0);
+}
+
+static int appfs_fuse_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+	int fd;
+	int chmod_ret;
+
+	fd = appfs_fuse_open(path, fi);
+	if (fd < 0) {
+		return(fd);
+	}
+
+	chmod_ret = fchmod(fd, mode);
+	if (chmod_ret != 0) {
+		close(fd);
+
+		return(-EIO);
+	}
+
+	return(fd);
+}
+
 /*
  * SQLite3 mode: Execute raw SQL and return success or failure
  */
@@ -845,7 +926,9 @@ static struct fuse_operations appfs_operations = {
 	.open      = appfs_fuse_open,
 	.release   = appfs_fuse_close,
 	.read      = appfs_fuse_read,
-	.write     = appfs_fuse_write
+	.write     = appfs_fuse_write,
+	.mknod     = appfs_fuse_mknod,
+	.create    = appfs_fuse_create,
 };
 
 /*

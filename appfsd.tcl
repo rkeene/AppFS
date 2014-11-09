@@ -535,6 +535,9 @@ namespace eval ::appfs {
 				set retval(packaged) 1
 
 				set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
+
+				set retval(localpath) $localpath
+
 				if {[file exists $localpath]} {
 					catch {
 						file lstat $localpath localpathinfo
@@ -634,5 +637,35 @@ namespace eval ::appfs {
 		}
 
 		return $localcachefile
+	}
+
+	proc exists {path} {
+		catch {
+			set info [getattr $path]
+		} err
+
+		if {![info exists info]} {
+			if {$err == "No such file or directory"} {
+				return [list]
+			} else {
+				return -code error $err
+			}
+		}
+
+		return $info
+	}
+
+	proc prepare_to_create {path} {
+		if {[exists $path] != ""} {
+			return -code error "File already exists"
+		}
+
+		set filename [openpath $path "create"]
+
+		set dirname [file dirname $filename]
+
+		file mkdir $dirname
+
+		return $filename
 	}
 }
