@@ -407,6 +407,7 @@ namespace eval ::appfs {
 								set retval(_type) files
 								set retval(file) [join [lrange $path 4 end] "/"]
 							} else {
+								set retval(_type) files
 								set retval(file) ""
 							}
 						}
@@ -696,26 +697,6 @@ namespace eval ::appfs {
 		return $localpath
 	}
 
-	proc _delete_files_except_whiteout {path} {
-		foreach file [glob -nocomplain -directory $path {{.,}*}] {
-			if {[string match "*/.." $file] || [string match "*/." $file]} {
-				continue
-			}
-
-			if {[file isdirectory $file]} {
-				_delete_files_except_whiteout $file
-			}
-
-			if {[string match "*.APPFS.WHITEOUT" $file]} {
-				continue
-			}
-
-			catch {
-				file delete -- $file
-			}
-		}
-	}
-
 	proc unlinkpath {path} {
 		array set pathattrs [exists $path]
 
@@ -731,7 +712,6 @@ namespace eval ::appfs {
 			if {[file isdirectory $localpath]} {
 				set isdirectory 1
 				set whiteout 1
-				_delete_files_except_whiteout $localpath
 			} else {
 				file delete -force -- $localpath
 			}
