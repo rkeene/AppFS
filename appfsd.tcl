@@ -282,6 +282,7 @@ namespace eval ::appfs {
 			}
 
 			db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
+
 		}
 
 		# Look for packages that have been deleted
@@ -299,6 +300,8 @@ namespace eval ::appfs {
 		}
 
 		db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::ttl);}
+
+		appfsd::get_path_info_cache_flush
 
 		return COMPLETE
 	}
@@ -358,6 +361,8 @@ namespace eval ::appfs {
 				db eval {UPDATE packages SET haveManifest = 1 WHERE sha1 = $package_sha1;}
 			}
 		}
+
+		appfsd::get_path_info_cache_flush
 
 		return COMPLETE
 	}

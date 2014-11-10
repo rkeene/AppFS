@@ -47,10 +47,18 @@ time_t appfs_boottime;
 int appfs_fuse_started = 0;
 
 /*
+ * Global variables for AppFS caching
+ */
+pthread_mutex_t appfs_path_info_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+int appfs_path_info_cache_size = 8209;
+struct appfs_pathinfo *appfs_path_info_cache = NULL;
+
+/*
  * AppFS Path Type:  Describes the type of path a given file is
  */
 typedef enum {
 	APPFS_PATHTYPE_INVALID,
+	APPFS_PATHTYPE_DOES_NOT_EXIST,
 	APPFS_PATHTYPE_FILE,
 	APPFS_PATHTYPE_DIRECTORY,
 	APPFS_PATHTYPE_SYMLINK,
@@ -82,6 +90,10 @@ struct appfs_pathinfo {
 			char source[256];
 		} symlink;
 	} typeinfo;
+
+	/* Attributes used only for caching entries */
+	char *_cache_path;
+	uid_t _cache_uid;
 };
 
 /*
@@ -408,84 +420,6 @@ static char *appfs_get_homedir(uid_t fsuid) {
 }
 
 /*
- * Tcl interface to get the home directory for the user making the "current"
- * FUSE I/O request
- */
-static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
-	char *homedir;
-	Tcl_Obj *homedir_obj;
-	uid_t fsuid;
-	static __thread Tcl_Obj *last_homedir_obj = NULL;
-	static __thread uid_t last_fsuid = -1;
-
-        if (objc != 1) {
-                Tcl_WrongNumArgs(interp, 1, objv, NULL);
-                return(TCL_ERROR);
-        }
-
-	fsuid = appfs_get_fsuid();
-
-	if (fsuid == last_fsuid && last_homedir_obj != NULL) {
-		homedir_obj = last_homedir_obj;
-	} else {
-		homedir = appfs_get_homedir(appfs_get_fsuid());
-
-		if (homedir == NULL) {
-			return(TCL_ERROR);
-		}
-
-		homedir_obj = Tcl_NewStringObj(homedir, -1);
-
-		free(homedir);
-
-		if (last_homedir_obj != NULL) {
-			Tcl_DecrRefCount(last_homedir_obj);
-		}
-
-		last_homedir_obj = homedir_obj;
-		last_fsuid = fsuid;
-
-		Tcl_IncrRefCount(last_homedir_obj);
-	}
-
-       	Tcl_SetObjResult(interp, homedir_obj);
-
-        return(TCL_OK);
-}
-
-static int tcl_appfs_simulate_user_fs_enter(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
-	appfs_simulate_user_fs_enter();
-
-	return(TCL_OK);
-}
-
-static int tcl_appfs_simulate_user_fs_leave(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
-	appfs_simulate_user_fs_leave();
-
-	return(TCL_OK);
-}
-
-static int tcl_appfs_get_fsuid(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
-	uid_t fsuid;
-
-	fsuid = appfs_get_fsuid();
-
-       	Tcl_SetObjResult(interp, Tcl_NewWideIntObj(fsuid));
-
-	return(TCL_OK);
-}
-
-static int tcl_appfs_get_fsgid(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
-	gid_t fsgid;
-
-	fsgid = appfs_get_fsgid();
-
-       	Tcl_SetObjResult(interp, Tcl_NewWideIntObj(fsgid));
-
-	return(TCL_OK);
-}
-
-/*
  * Generate an inode for a given path.  The inode should be computed in such
  * a way that it is unlikely to be duplicated and remains the same for a given
  * file
@@ -508,6 +442,165 @@ static long long appfs_get_path_inode(const char *path) {
 	return(retval);
 }
 
+/*
+ * Cache Get Path Info lookups for speed
+ */
+static int appfs_get_path_info_cache_get(const char *path, uid_t uid, struct appfs_pathinfo *pathinfo) {
+	unsigned int hash_idx;
+	int pthread_ret;
+	int retval;
+
+	retval = 1;
+
+	pthread_ret = pthread_mutex_lock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to lock path_info cache mutex !");
+
+		return(-1);
+	}
+
+	if (appfs_path_info_cache != NULL) {
+		hash_idx = (appfs_get_path_inode(path) + uid) % appfs_path_info_cache_size;
+
+		if (appfs_path_info_cache[hash_idx]._cache_path != NULL) {
+			if (strcmp(appfs_path_info_cache[hash_idx]._cache_path, path) == 0 && appfs_path_info_cache[hash_idx]._cache_uid == uid) {
+				retval = 0;
+
+				memcpy(pathinfo, &appfs_path_info_cache[hash_idx], sizeof(*pathinfo));
+				pathinfo->_cache_path = NULL;
+			}
+		}
+	}
+
+	pthread_ret = pthread_mutex_unlock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to unlock path_info cache mutex !");
+
+		return(-1);
+	}
+
+	if (retval == 0) {
+		APPFS_DEBUG("Cache hit on %s", path);
+	} else {
+		APPFS_DEBUG("Cache miss on %s", path);
+	}
+
+	return(retval);
+}
+
+static void appfs_get_path_info_cache_add(const char *path, uid_t uid, struct appfs_pathinfo *pathinfo) {
+	unsigned int hash_idx;
+	int pthread_ret;
+
+	pthread_ret = pthread_mutex_lock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to lock path_info cache mutex !");
+
+		return;
+	}
+
+	if (appfs_path_info_cache == NULL) {
+		appfs_path_info_cache = calloc(appfs_path_info_cache_size, sizeof(*appfs_path_info_cache));
+	}
+
+	hash_idx = (appfs_get_path_inode(path) + uid) % appfs_path_info_cache_size;
+
+	if (appfs_path_info_cache[hash_idx]._cache_path != NULL) {
+		free(appfs_path_info_cache[hash_idx]._cache_path);
+	}
+
+	memcpy(&appfs_path_info_cache[hash_idx], pathinfo, sizeof(*pathinfo));
+
+	appfs_path_info_cache[hash_idx]._cache_path = strdup(path);
+	appfs_path_info_cache[hash_idx]._cache_uid  = uid;
+
+	pthread_ret = pthread_mutex_unlock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to unlock path_info cache mutex !");
+
+		return;
+	}
+	return;
+}
+
+static void appfs_get_path_info_cache_rm(const char *path, uid_t uid) {
+	unsigned int hash_idx;
+	int pthread_ret;
+
+	pthread_ret = pthread_mutex_lock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to lock path_info cache mutex !");
+
+		return;
+	}
+
+	if (appfs_path_info_cache != NULL) {
+		hash_idx = (appfs_get_path_inode(path) + uid) % appfs_path_info_cache_size;
+
+		if (appfs_path_info_cache[hash_idx]._cache_path != NULL) {
+			free(appfs_path_info_cache[hash_idx]._cache_path);
+
+			appfs_path_info_cache[hash_idx]._cache_path = NULL;
+		}
+	}
+
+	pthread_ret = pthread_mutex_unlock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to unlock path_info cache mutex !");
+
+		return;
+	}
+
+	return;
+}
+
+static void appfs_get_path_info_cache_flush(uid_t uid, int new_size) {
+	unsigned int idx;
+	int pthread_ret;
+
+	pthread_ret = pthread_mutex_lock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to lock path_info cache mutex !");
+
+		return;
+	}
+
+	if (appfs_path_info_cache != NULL) {
+		for (idx = 0; idx < appfs_path_info_cache_size; idx++) {
+			if (appfs_path_info_cache[idx]._cache_path != NULL) {
+				if (uid != ((uid_t) -1)) {
+					if (appfs_path_info_cache[idx]._cache_uid != uid) {
+						continue;
+					}
+				}
+
+				free(appfs_path_info_cache[idx]._cache_path);
+
+				appfs_path_info_cache[idx]._cache_path = NULL;
+			}
+		}
+	}
+
+	if (uid == ((uid_t) -1)) {
+		free(appfs_path_info_cache);
+
+		appfs_path_info_cache = NULL;
+
+		if (new_size != -1) {
+			appfs_path_info_cache_size = new_size;
+		}
+	}
+
+	pthread_ret = pthread_mutex_unlock(&appfs_path_info_cache_mutex);
+	if (pthread_ret != 0) {
+		APPFS_DEBUG("Unable to unlock path_info cache mutex !");
+
+		return;
+	}
+
+	return;
+}
+
 /* Get information about a path, and optionally list children */
 static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo) {
 	Tcl_Interp *interp;
@@ -516,7 +609,21 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	Tcl_WideInt attr_value_wide;
 	int attr_value_int;
 	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL, *attr_key_packaged = NULL;
+	int cache_ret;
 	int tcl_ret;
+
+	cache_ret = appfs_get_path_info_cache_get(path, appfs_get_fsuid(), pathinfo);
+	if (cache_ret == 0) {
+		if (pathinfo->type == APPFS_PATHTYPE_DOES_NOT_EXIST) {
+			return(-ENOENT);
+		}
+
+		if (pathinfo->type == APPFS_PATHTYPE_INVALID) {
+			return(-EIO);
+		}
+
+		return(0);
+	}
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
@@ -527,6 +634,10 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		pathinfo->type = APPFS_PATHTYPE_DOES_NOT_EXIST;
+
+		appfs_get_path_info_cache_add(path, appfs_get_fsuid(), pathinfo);
 
 		return(-ENOENT);
 	}
@@ -635,6 +746,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		pathinfo->time = 0;
 	}
 
+	appfs_get_path_info_cache_add(path, appfs_get_fsuid(), pathinfo);
+
 	return(0);
 }
 
@@ -642,6 +755,8 @@ static char *appfs_prepare_to_create(const char *path) {
 	Tcl_Interp *interp;
 	const char *real_path;
 	int tcl_ret;
+
+	appfs_get_path_info_cache_flush(appfs_get_fsuid(), -1);
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
@@ -769,8 +884,12 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			stbuf->st_nlink = 1;
 			stbuf->st_size = 0;
 			break;
-		case APPFS_PATHTYPE_INVALID:
+		case APPFS_PATHTYPE_DOES_NOT_EXIST:
 			retval = -ENOENT;
+
+			break;
+		case APPFS_PATHTYPE_INVALID:
+			retval = -EIO;
 
 			break;
 	}
@@ -841,6 +960,12 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 		}
 
 		mode = "create";
+
+		/*
+		 * We have to clear the cache here so that the number of
+		 * links gets maintained on the parent directory
+		 */
+		appfs_get_path_info_cache_flush(appfs_get_fsuid(), -1);
 	} else {
 		/* The file must already exist */
 		if (gpi_ret != 0) {
@@ -892,6 +1017,8 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 static int appfs_fuse_close(const char *path, struct fuse_file_info *fi) {
 	int close_ret;
 
+	appfs_get_path_info_cache_rm(path, appfs_get_fsuid());
+
 	close_ret = close(fi->fh);
 	if (close_ret != 0) {
 		return(-EIO);
@@ -921,6 +1048,8 @@ static int appfs_fuse_write(const char *path, const char *buf, size_t size, off_
 	ssize_t write_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	appfs_get_path_info_cache_rm(path, appfs_get_fsuid());
 
 	lseek_ret = lseek(fi->fh, offset, SEEK_SET);
 	if (lseek_ret != offset) {
@@ -1013,6 +1142,8 @@ static int appfs_fuse_truncate(const char *path, off_t size) {
 		return(-EIO);
 	}
 
+	appfs_get_path_info_cache_rm(path, appfs_get_fsuid());
+
 	appfs_simulate_user_fs_enter();
 
 	truncate_ret = truncate(real_path, size);
@@ -1033,6 +1164,8 @@ static int appfs_fuse_unlink_rmdir(const char *path) {
 	int tcl_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	appfs_get_path_info_cache_flush(appfs_get_fsuid(), -1);
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
@@ -1055,7 +1188,6 @@ static int appfs_fuse_mkdir(const char *path, mode_t mode) {
 	int mkdir_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
-
 
 	real_path = appfs_prepare_to_create(path);
 	if (real_path == NULL) {
@@ -1085,6 +1217,8 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 	int tcl_ret, chmod_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	appfs_get_path_info_cache_rm(path, appfs_get_fsuid());
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
@@ -1180,6 +1314,105 @@ static int appfs_tcl(const char *tcl) {
  *         Bridge for I/O operations to request information about the current
  *         transaction
  */
+/*
+ * Tcl interface to get the home directory for the user making the "current"
+ * FUSE I/O request
+ */
+static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	char *homedir;
+	Tcl_Obj *homedir_obj;
+	uid_t fsuid;
+	static __thread Tcl_Obj *last_homedir_obj = NULL;
+	static __thread uid_t last_fsuid = -1;
+
+        if (objc != 1) {
+                Tcl_WrongNumArgs(interp, 1, objv, NULL);
+                return(TCL_ERROR);
+        }
+
+	fsuid = appfs_get_fsuid();
+
+	if (fsuid == last_fsuid && last_homedir_obj != NULL) {
+		homedir_obj = last_homedir_obj;
+	} else {
+		homedir = appfs_get_homedir(appfs_get_fsuid());
+
+		if (homedir == NULL) {
+			return(TCL_ERROR);
+		}
+
+		homedir_obj = Tcl_NewStringObj(homedir, -1);
+
+		free(homedir);
+
+		if (last_homedir_obj != NULL) {
+			Tcl_DecrRefCount(last_homedir_obj);
+		}
+
+		last_homedir_obj = homedir_obj;
+		last_fsuid = fsuid;
+
+		Tcl_IncrRefCount(last_homedir_obj);
+	}
+
+       	Tcl_SetObjResult(interp, homedir_obj);
+
+        return(TCL_OK);
+}
+
+static int tcl_appfs_simulate_user_fs_enter(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	appfs_simulate_user_fs_enter();
+
+	return(TCL_OK);
+}
+
+static int tcl_appfs_simulate_user_fs_leave(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	appfs_simulate_user_fs_leave();
+
+	return(TCL_OK);
+}
+
+static int tcl_appfs_get_fsuid(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	uid_t fsuid;
+
+	fsuid = appfs_get_fsuid();
+
+       	Tcl_SetObjResult(interp, Tcl_NewWideIntObj(fsuid));
+
+	return(TCL_OK);
+}
+
+static int tcl_appfs_get_fsgid(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	gid_t fsgid;
+
+	fsgid = appfs_get_fsgid();
+
+       	Tcl_SetObjResult(interp, Tcl_NewWideIntObj(fsgid));
+
+	return(TCL_OK);
+}
+
+static int tcl_appfs_get_path_info_cache_flush(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	int tcl_ret;
+	int new_size;
+
+	new_size = -1;
+
+	if (objc == 2) {
+		tcl_ret = Tcl_GetIntFromObj(interp, objv[1], &new_size);
+		if (tcl_ret != TCL_OK) {
+			return(tcl_ret);
+		}
+	} else if (objc > 2 || objc < 1) {
+                Tcl_WrongNumArgs(interp, 1, objv, "?new_cache_size?");
+		return(TCL_ERROR);
+	}
+
+	appfs_get_path_info_cache_flush(-1, new_size);
+
+	return(TCL_OK);
+}
+
 static int Appfsd_Init(Tcl_Interp *interp) {
 #ifdef USE_TCL_STUBS
 	if (Tcl_InitStubs(interp, TCL_VERSION, 0) == 0L) {
@@ -1192,6 +1425,7 @@ static int Appfsd_Init(Tcl_Interp *interp) {
 	Tcl_CreateObjCommand(interp, "appfsd::get_fsgid", tcl_appfs_get_fsgid, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_enter", tcl_appfs_simulate_user_fs_enter, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_leave", tcl_appfs_simulate_user_fs_leave, NULL, NULL);
+	Tcl_CreateObjCommand(interp, "appfsd::get_path_info_cache_flush", tcl_appfs_get_path_info_cache_flush, NULL, NULL);
 
 	Tcl_PkgProvide(interp, "appfsd", "1.0");
 
