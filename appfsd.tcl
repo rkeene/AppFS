@@ -354,14 +354,20 @@ namespace eval ::appfs {
 	}
 
 	proc _localpath {package hostname file} {
-		set homedir [::appfsd::get_homedir]
-		set dir [file join $homedir .appfs "./${package}@${hostname}" "./${file}"]
+		set dir ""
+		catch {
+			set homedir [::appfsd::get_homedir]
+			set dir [file join $homedir .appfs "./${package}@${hostname}" "./${file}"]
+		}
 		return $dir
 	}
 
 	proc _whiteoutpath {package hostname file} {
-		set homedir [::appfsd::get_homedir]
-		set dir [file join $homedir .appfs "./${package}@${hostname}" ".APPFS.WHITEOUT" "./${file}.APPFS.WHITEOUT"]
+		set dir ""
+		catch {
+			set homedir [::appfsd::get_homedir]
+			set dir [file join $homedir .appfs "./${package}@${hostname}" ".APPFS.WHITEOUT" "./${file}.APPFS.WHITEOUT"]
+		}
 		return $dir
 	}
 
@@ -478,28 +484,32 @@ namespace eval ::appfs {
 						set dir [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
 						set whiteoutdir [string range [_whiteoutpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)] 0 end-15]
 
-						foreach file [glob -nocomplain -tails -directory $whiteoutdir {{.,}*.APPFS.WHITEOUT}] {
-							set remove [string range $file 0 end-15]
-							set idx [lsearch -exact $retval $remove]
-							if {$idx != -1} {
-								set retval [lreplace $retval $idx $idx]
+						if {$whiteoutdir != ""} {
+							foreach file [glob -nocomplain -tails -directory $whiteoutdir {{.,}*.APPFS.WHITEOUT}] {
+								set remove [string range $file 0 end-15]
+								set idx [lsearch -exact $retval $remove]
+								if {$idx != -1} {
+									set retval [lreplace $retval $idx $idx]
+								}
 							}
 						}
 
-						foreach file [glob -nocomplain -tails -directory $dir -types {d f l p s} {{.,}*}] {
-							if {$file == "." || $file == ".."} {
-								continue
-							}
+						if {$dir != ""} {
+							foreach file [glob -nocomplain -tails -directory $dir {{.,}*}] {
+								if {$file == "." || $file == ".."} {
+									continue
+								}
 
-							if {$file == ".APPFS.WHITEOUT"} {
-								continue
-							}
+								if {$file == ".APPFS.WHITEOUT"} {
+									continue
+								}
 
-							if {[lsearch -exact $retval $file] != -1} {
-								continue
-							}
+								if {[lsearch -exact $retval $file] != -1} {
+									continue
+								}
 
-							lappend retval $file
+								lappend retval $file
+							}
 						}
 					}
 				}
@@ -573,7 +583,7 @@ namespace eval ::appfs {
 				set retval(localpath) $localpath
 				set retval(whiteoutpath) $whiteoutpath
 
-				if {[file exists $localpath]} {
+				if {$localpath != "" && [file exists $localpath]} {
 					set retval(is_localfile) 1
 					catch {
 						_as_user {
@@ -615,7 +625,7 @@ namespace eval ::appfs {
 						}
 					} err
 				} else {
-					if {![file exists $whiteoutpath]} {
+					if {$whiteoutpath == "" || ![file exists $whiteoutpath]} {
 						set retval(is_remotefile) 1
 
 						set work [split $pathinfo(file) "/"]
@@ -628,7 +638,7 @@ namespace eval ::appfs {
 
 						::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
 
-						if {$retval(type) == "directory"} {
+						if {[info exists retval(type)] && $retval(type) == "directory"} {
 							set retval(childcount) [llength [getchildren $path]]
 						}
 
@@ -656,10 +666,14 @@ namespace eval ::appfs {
 		set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
 
 		if {$mode == "create"} {
+			if {$localpath == ""} {
+				return -code error "Asked to create, but no home directory."
+			}
+
 			return $localpath
 		}
 
-		if {[file exists $localpath]} {
+		if {$localpath != "" && [file exists $localpath]} {
 			return $localpath
 		}
 
@@ -743,6 +757,10 @@ namespace eval ::appfs {
 
 		set filename [localpath $path]
 
+		if {$filename == ""} {
+			return -code error "Asked to create, but no home directory."
+		}
+
 		set dirname [file dirname $filename]
 
 		_as_user {
@@ -760,6 +778,10 @@ namespace eval ::appfs {
 		}
 
 		set localpath $pathattrs(localpath)
+
+		if {$localpath == ""} {
+			return -code error "Asked to delete, but no home directory."
+		}
 
 		if {[info exists pathattrs(is_localfile)]} {
 			if {[file isdirectory $localpath]} {
