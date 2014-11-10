@@ -5,6 +5,7 @@ package require sqlite3
 package require sha1
 package require appfsd
 package require platform
+package require pki
 
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"

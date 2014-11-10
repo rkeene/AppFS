@@ -147,6 +147,25 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	}
 
 	/*
+	 * Load "pki.tcl" in the same way as appfsd.tcl (see below)
+	 */
+	tcl_ret = Tcl_Eval(interp, ""
+#include "pki.tcl.h"
+	"");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl PKI.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
+		Tcl_DeleteInterp(interp);
+
+		return(NULL);
+	}
+
+	/*
 	 * Load the "appfsd.tcl" script, which is "compiled" into a C header
 	 * so that it does not need to exist on the filesystem and can be
 	 * directly evaluated.
@@ -1326,7 +1345,7 @@ int main(int argc, char **argv) {
 		}
 
 		fprintf(stderr, "Unable to initialize Tcl interpreter for AppFSd:\n");
-		fprintf(stderr, "%s", test_interp_error);
+		fprintf(stderr, "%s\n", test_interp_error);
 
 		return(1);
 	}
