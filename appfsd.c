@@ -1,5 +1,6 @@
 #define FUSE_USE_VERSION 26
 
+#include <sys/fsuid.h>
 #include <sys/types.h>
 #include <pthread.h>
 #include <string.h>
@@ -303,6 +304,38 @@ static uid_t appfs_get_fsuid(void) {
 }
 
 /*
+ * Determine the GID for the user making the current FUSE filesystem request.
+ * This will be used to lookup the user's home directory so we can search for
+ * locally modified files.
+ */
+static gid_t appfs_get_fsgid(void) {
+	struct fuse_context *ctx;
+
+	if (!appfs_fuse_started) {
+		return(getgid());
+	}
+
+	ctx = fuse_get_context();
+	if (ctx == NULL) {
+		/* Unable to lookup user for some reason */
+		/* Return an unprivileged user ID */
+		return(1);
+	}
+
+	return(ctx->gid);
+}
+
+static void appfs_simulate_user_fs_enter(void) {
+	setfsuid(appfs_get_fsuid());
+	setfsgid(appfs_get_fsgid());
+}
+
+static void appfs_simulate_user_fs_leave(void) {
+	setfsuid(0);
+	setfsgid(0);
+}
+
+/*
  * Look up the home directory for a given UID
  *        Returns a C string containing the user's home directory or NULL if
  *        the user's home directory does not exist or is not correctly
@@ -361,21 +394,42 @@ static char *appfs_get_homedir(uid_t fsuid) {
  */
 static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
 	char *homedir;
+	Tcl_Obj *homedir_obj;
+	uid_t fsuid;
+	static __thread Tcl_Obj *last_homedir_obj = NULL;
+	static __thread uid_t last_fsuid = -1;
 
         if (objc != 1) {
                 Tcl_WrongNumArgs(interp, 1, objv, NULL);
                 return(TCL_ERROR);
         }
 
-	homedir = appfs_get_homedir(appfs_get_fsuid());
+	fsuid = appfs_get_fsuid();
 
-	if (homedir == NULL) {
-		return(TCL_ERROR);
+	if (fsuid == last_fsuid && last_homedir_obj != NULL) {
+		homedir_obj = last_homedir_obj;
+	} else {
+		if (last_homedir_obj != NULL) {
+			Tcl_DecrRefCount(last_homedir_obj);
+		}
+
+		homedir = appfs_get_homedir(appfs_get_fsuid());
+
+		if (homedir == NULL) {
+			return(TCL_ERROR);
+		}
+
+		homedir_obj = Tcl_NewStringObj(homedir, -1);
+
+		free(homedir);
+
+		last_homedir_obj = homedir_obj;
+		last_fsuid = fsuid;
+
+		Tcl_IncrRefCount(last_homedir_obj);
 	}
 
-        Tcl_SetObjResult(interp, Tcl_NewStringObj(homedir, -1));
-
-	free(homedir);
+       	Tcl_SetObjResult(interp, homedir_obj);
 
         return(TCL_OK);
 }
@@ -632,6 +686,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_ino   = pathinfo.inode;
 	stbuf->st_mode  = 0;
 	stbuf->st_uid   = appfs_get_fsuid();
+	stbuf->st_gid   = appfs_get_fsgid();
 
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
@@ -747,8 +802,12 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 		return(-EIO);
 	}
 
+	appfs_simulate_user_fs_enter();
+
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, mode);
 	if (tcl_ret != TCL_OK) {
+		appfs_simulate_user_fs_leave();
+
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, mode);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
@@ -757,12 +816,17 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 
 	real_path = Tcl_GetStringResult(interp);
 	if (real_path == NULL) {
+		appfs_simulate_user_fs_leave();
+
 		return(-EIO);
 	}
 
 	APPFS_DEBUG("Translated request to open %s to opening %s (mode = \"%s\")", path, real_path, mode);
 
 	fh = open(real_path, fi->flags, 0600);
+
+	appfs_simulate_user_fs_leave();
+
 	if (fh < 0) {
 		return(-EIO);
 	}
@@ -829,12 +893,18 @@ static int appfs_fuse_mknod(const char *path, mode_t mode, dev_t device) {
 		return(-EPERM);
 	}
 
+	appfs_simulate_user_fs_enter();
+
 	real_path = appfs_prepare_to_create(path);
 	if (real_path == NULL) {
+		appfs_simulate_user_fs_leave();
+
 		return(-EIO);
 	}
 
 	mknod_ret = mknod(real_path, mode, device);
+
+	appfs_simulate_user_fs_leave();
 
 	free(real_path);
 
@@ -859,12 +929,18 @@ static int appfs_fuse_create(const char *path, mode_t mode, struct fuse_file_inf
 		return(-EPERM);
 	}
 
+	appfs_simulate_user_fs_enter();
+
 	real_path = appfs_prepare_to_create(path);
 	if (real_path == NULL) {
+		appfs_simulate_user_fs_leave();
+
 		return(-EIO);
 	}
 
 	fd = creat(real_path, mode);
+
+	appfs_simulate_user_fs_leave();
 
 	free(real_path);
 
@@ -888,7 +964,11 @@ static int appfs_fuse_truncate(const char *path, off_t size) {
 		return(-EIO);
 	}
 
+	appfs_simulate_user_fs_enter();
+
 	truncate_ret = truncate(real_path, size);
+
+	appfs_simulate_user_fs_leave();
 
 	free(real_path);
 
@@ -910,7 +990,12 @@ static int appfs_fuse_unlink_rmdir(const char *path) {
 		return(-EIO);
 	}
 
+	appfs_simulate_user_fs_enter();
+
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::unlinkpath", path);
+
+	appfs_simulate_user_fs_leave();
+
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::unlinkpath(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
@@ -927,12 +1012,18 @@ static int appfs_fuse_mkdir(const char *path, mode_t mode) {
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
+	appfs_simulate_user_fs_enter();
+
 	real_path = appfs_prepare_to_create(path);
 	if (real_path == NULL) {
+		appfs_simulate_user_fs_leave();
+
 		return(-EIO);
 	}
 
 	mkdir_ret = mkdir(real_path, mode);
+
+	appfs_simulate_user_fs_leave();
 
 	free(real_path);
 
@@ -957,8 +1048,12 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 		return(-EIO);
 	}
 
+	appfs_simulate_user_fs_enter();
+
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, "write");
 	if (tcl_ret != TCL_OK) {
+		appfs_simulate_user_fs_leave();
+
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, "write");
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
@@ -967,10 +1062,14 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 
 	real_path = Tcl_GetStringResult(interp);
 	if (real_path == NULL) {
+		appfs_simulate_user_fs_leave();
+
 		return(-EIO);
 	}
 
 	chmod_ret = chmod(real_path, mode);
+
+	appfs_simulate_user_fs_leave();
 
 	return(chmod_ret);
 }
