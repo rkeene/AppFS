@@ -434,6 +434,18 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
         return(TCL_OK);
 }
 
+static int tcl_appfs_simulate_user_fs_enter(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	appfs_simulate_user_fs_enter();
+
+	return(TCL_OK);
+}
+
+static int tcl_appfs_simulate_user_fs_leave(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	appfs_simulate_user_fs_leave();
+
+	return(TCL_OK);
+}
+
 /*
  * Generate an inode for a given path.  The inode should be computed in such
  * a way that it is unlikely to be duplicated and remains the same for a given
@@ -472,7 +484,12 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		return(-EIO);
 	}
 
+	appfs_simulate_user_fs_enter();
+
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getattr", path);
+
+	appfs_simulate_user_fs_leave();
+
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
@@ -559,9 +576,11 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				}
 			}
 			break;
-		case 'p': /* pipe/fifo */
+		case 'F': /* pipe/fifo */
+			pathinfo->type = APPFS_PATHTYPE_FIFO;
 			break;
 		case 'S': /* UNIX domain socket */
+			pathinfo->type = APPFS_PATHTYPE_SOCKET;
 			break;
 		default:
 			return(-EIO);
@@ -709,7 +728,15 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			stbuf->st_size = pathinfo.typeinfo.symlink.size;
 			break;
 		case APPFS_PATHTYPE_SOCKET:
+			stbuf->st_mode = S_IFSOCK | 0555;
+			stbuf->st_nlink = 1;
+			stbuf->st_size = 0;
+			break;
 		case APPFS_PATHTYPE_FIFO:
+			stbuf->st_mode = S_IFIFO | 0555;
+			stbuf->st_nlink = 1;
+			stbuf->st_size = 0;
+			break;
 		case APPFS_PATHTYPE_INVALID:
 			retval = -ENOENT;
 
@@ -739,7 +766,12 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
 
+	appfs_simulate_user_fs_enter();
+
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getchildren", path);
+
+	appfs_simulate_user_fs_leave();
+
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getchildren(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
@@ -1149,6 +1181,8 @@ static int Appfsd_Init(Tcl_Interp *interp) {
 #endif
 
 	Tcl_CreateObjCommand(interp, "appfsd::get_homedir", tcl_appfs_get_homedir, NULL, NULL);
+	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_enter", tcl_appfs_simulate_user_fs_enter, NULL, NULL);
+	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_leave", tcl_appfs_simulate_user_fs_leave, NULL, NULL);
 
 	Tcl_PkgProvide(interp, "appfsd", "1.0");
 

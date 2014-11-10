@@ -159,8 +159,12 @@ namespace eval ::appfs {
 	}
 
 	proc download {hostname hash {method sha1}} {
+		::appfsd::simulate_user_fs_leave
+
 		set url [_construct_url $hostname $hash $method]
 		set file [_cachefile $url $hash]
+
+		::appfsd::simulate_user_fs_enter
 
 		if {![file exists $file]} {
 			return -code error "Unable to fetch (file does not exist: $file)"
@@ -474,7 +478,7 @@ namespace eval ::appfs {
 						}
 					}
 
-					foreach file [glob -nocomplain -tails -directory $dir -types {d f l} {{.,}*}] {
+					foreach file [glob -nocomplain -tails -directory $dir -types {d f l p s} {{.,}*}] {
 						if {$file == "." || $file == ".."} {
 							continue
 						}
@@ -583,6 +587,14 @@ namespace eval ::appfs {
 							"link" {
 								set retval(type) "symlink"
 								set retval(source) [file readlink $localpath]
+							}
+							"fifo" {
+								# Capitalized so that the first char is unique
+								set retval(type) "Fifo"
+							}
+							"socket" {
+								# Capitalized so that the first char is unique
+								set retval(type) "Socket"
 							}
 						}
 					} err
@@ -724,38 +736,31 @@ namespace eval ::appfs {
 
 		set localpath $pathattrs(localpath)
 
-		set whiteout 0
-		set isdirectory 0
 		if {[info exists pathattrs(is_localfile)]} {
 			if {[file isdirectory $localpath]} {
-				set whiteout 1
-
-				set isdirectory 1
 				set children [getchildren $path]
+
+				if {[llength $children] != 0} {
+					return -code error "Asked to delete non-empty directory"
+				}
 			}
+
 			file delete -force -- $localpath
 		} elseif {[info exists pathattrs(is_remotefile)]} {
 			if {$pathattrs(type) == "directory"} {
-				set isdirectory 1
 				set children [getchildren $path]
-			}
 
-			set whiteout 1
+				if {[llength $children] != 0} {
+					return -code error "Asked to delete non-empty directory"
+				}
+			}
 		} else {
 			return -code error "Unknown if file is remote or local !?"
 		}
 
-		if {$isdirectory} {
-			if {$children != [list]} {
-				return -code error "Asked to delete non-empty directory"
-			}
-		}
-
-		if {$whiteout} {
-			set whiteoutfile $pathattrs(whiteoutpath)
-			set whiteoutdir [file dirname $whiteoutfile]
-			file mkdir $whiteoutdir
-			close [open $whiteoutfile w]
-		}
+		set whiteoutfile $pathattrs(whiteoutpath)
+		set whiteoutdir [file dirname $whiteoutfile]
+		file mkdir $whiteoutdir
+		close [open $whiteoutfile w]
 	}
 }
