@@ -1,3 +1,7 @@
 appfsd
 appfsd.o
 appfsd.tcl.h
+sha1.o
+sha1.tcl.h
+pki.tcl.h
+pki.tcl.new

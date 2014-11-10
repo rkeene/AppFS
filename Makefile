@@ -1,12 +1,10 @@
 CC = gcc
 PKG_CONFIG = pkg-config
 FUSE_CFLAGS = $(shell $(PKG_CONFIG) --cflags fuse)
-SQLITE3_CFLAGS = $(shell $(PKG_CONFIG) --cflags sqlite3)
-CFLAGS = -Wall $(FUSE_CFLAGS) $(SQLITE3_CFLAGS) $(TCL_CFLAGS) -DDEBUG=1
+CFLAGS = -Wall $(FUSE_CFLAGS) $(TCL_CFLAGS) -DDEBUG=1
 LDFLAGS = $(TCL_LDFLAGS)
 FUSE_LIBS = $(shell $(PKG_CONFIG) --libs fuse)
-SQLITE3_LIBS = $(shell $(PKG_CONFIG) --libs sqlite3)
-LIBS = $(FUSE_LIBS) $(SQLITE3_LIBS) $(TCL_LIBS)
+LIBS = $(FUSE_LIBS) $(TCL_LIBS)
 PREFIX = /usr/local
 prefix = $(PREFIX)
 bindir = $(prefix)/bin
@@ -24,24 +22,48 @@ TCL_LIBS = $(shell . $(TCLCONFIG_SH_PATH); echo "$${TCL_LIB_SPEC}")
 
 all: appfsd
 
-appfsd: appfsd.o
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o appfsd appfsd.o $(LIBS)
+appfsd: appfsd.o sha1.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o appfsd appfsd.o sha1.o $(LIBS)
 
-appfsd.o: appfsd.c appfsd.tcl.h
+appfsd.o: appfsd.c appfsd.tcl.h pki.tcl.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o appfsd.o -c appfsd.c
 
-appfsd.tcl.h: appfsd.tcl sha1.tcl
-	sed '/@@SHA1\.TCL@@/ r sha1.tcl' appfsd.tcl | sed '/@@SHA1\.TCL@@/ d' | sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' > appfsd.tcl.h.new
-	mv appfsd.tcl.h.new appfsd.tcl.h
+sha1.o: sha1.c sha1.tcl.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o sha1.o -c sha1.c
 
-install: appfsd
+pki.tcl:
+	rm -f pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/asn/asn.tcl?name=aea6802a16e69c9f2d4f5eca20fdc23174609731 > pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/aes/aes.tcl?name=94452b42b4ca98298ab1465c40fd87d11a40cf5e >> pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/des/tcldes.tcl?name=ffea6ca6eb4468c0edef7a745b1dadc632ff5aeb >> pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/des/des.tcl?name=5d8f3a7c1a6ea88ee988652643db8f06038aff49 >> pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/math/bignum.tcl?name=3bc84d9b1f18c2e7360573381317c4dc9af731f9 >> pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/md5/md5x.tcl?name=3cddfa803d680a79ab7dfac90edfd751f3d4fadd >> pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/sha1/sha256.tcl?name=1fd001eb65e88c823b980456726079deae3512df >> pki.tcl.new
+	curl 'http://core.tcl.tk/tcllib/raw/modules/pki/pki.tcl?name=8318fd31981dcc00bfadd6c427518f9d71a12b34' >> pki.tcl.new
+	openssl sha1 pki.tcl.new | grep '918ddd77f485a58192b2e86230777092d790191a' >/dev/null
+	mv pki.tcl.new pki.tcl
+
+%.tcl.h: %.tcl
+	sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' $^ > $@.new
+	mv $@.new $@
+
+install: appfsd appfs-cache appfs-mkfs
 	if [ ! -d '$(DESTDIR)$(sbindir)' ]; then mkdir -p '$(DESTDIR)$(sbindir)'; chmod 755 '$(DESTDIR)$(sbindir)'; fi
+	if [ ! -d '$(DESTDIR)$(bindir)' ]; then mkdir -p '$(DESTDIR)$(bindir)'; chmod 755 '$(DESTDIR)$(bindir)'; fi
 	cp appfsd '$(DESTDIR)$(sbindir)/'
+	cp appfs-cache '$(DESTDIR)$(sbindir)/'
+	cp appfs-mkfs '$(DESTDIR)$(bindir)/'
 
 clean:
 	rm -f appfsd appfsd.o
 	rm -f appfsd.tcl.h
+	rm -f sha1.o sha1.tcl.h
+	rm -f pki.tcl.new pki.tcl.h
 
 distclean: clean
 
-.PHONY: all test clean distclean install
+mrproper: distclean
+	rm -f pki.tcl
+
+.PHONY: all install clean distclean mrproper

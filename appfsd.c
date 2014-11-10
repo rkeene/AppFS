@@ -1,7 +1,7 @@
 #define FUSE_USE_VERSION 26
 
+#include <sys/fsuid.h>
 #include <sys/types.h>
-#include <sqlite3.h>
 #include <pthread.h>
 #include <string.h>
 #include <stdarg.h>
@@ -14,44 +14,55 @@
 #include <pwd.h>
 #include <tcl.h>
 
+/*
+ * Default cache directory
+ */
 #ifndef APPFS_CACHEDIR
 #define APPFS_CACHEDIR "/var/cache/appfs"
 #endif
 
+/* Debugging macros */
 #ifdef DEBUG
 #define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
 #else
 #define APPFS_DEBUG(x...) /**/
 #endif
 
+/*
+ * SHA1 Tcl Package initializer, from sha1.o
+ */
+int Sha1_Init(Tcl_Interp *interp);
+
+/*
+ * Thread Specific Data (TSD) for Tcl Interpreter for the current thread
+ */
 static pthread_key_t interpKey;
 
-struct appfs_thread_data {
-	sqlite3 *db;
-	const char *cachedir;
-	time_t boottime;
-	const char *platform;
-	struct {
-		int writable;
-	} options;
-};
+/*
+ * Global variables, needed for all threads but only initialized before any
+ * FUSE threads are created
+ */
+const char *appfs_cachedir;
+time_t appfs_boottime;
+int appfs_fuse_started = 0;
 
-struct appfs_thread_data globalThread;
-
+/*
+ * AppFS Path Type:  Describes the type of path a given file is
+ */
 typedef enum {
 	APPFS_PATHTYPE_INVALID,
 	APPFS_PATHTYPE_FILE,
 	APPFS_PATHTYPE_DIRECTORY,
-	APPFS_PATHTYPE_SYMLINK
+	APPFS_PATHTYPE_SYMLINK,
+	APPFS_PATHTYPE_SOCKET,
+	APPFS_PATHTYPE_FIFO,
 } appfs_pathtype_t;
 
-struct appfs_children {
-	struct appfs_children *_next;
-	int counter;
-
-	char name[256];
-};
-
+/*
+ * AppFS Path Information:
+ *         Completely describes a specific path, how it should be returned to
+ *         to the kernel
+ */
 struct appfs_pathinfo {
 	appfs_pathtype_t type;
 	time_t time;
@@ -65,7 +76,6 @@ struct appfs_pathinfo {
 		struct {
 			int executable;
 			off_t size;
-			char sha1[41];
 		} file;
 		struct {
 			off_t size;
@@ -74,13 +84,10 @@ struct appfs_pathinfo {
 	} typeinfo;
 };
 
-struct appfs_sqlite3_query_cb_handle {
-	struct appfs_children *head;
-	int argc;
-	const char *fmt;
-};
-
-static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
+/*
+ * Create a new Tcl interpreter and completely initialize it
+ */
+static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	Tcl_Interp *interp;
 	int tcl_ret;
 
@@ -90,18 +97,79 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 	if (interp == NULL) {
 		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
 
+		if (error_string) {
+			*error_string = strdup("Unable to create Tcl interpreter.");
+		}
+
 		return(NULL);
 	}
 
 	tcl_ret = Tcl_Init(interp);
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
 
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
 	}
 
+	tcl_ret = Tcl_Eval(interp, "package ifneeded sha1 1.0 [list load {} sha1]");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl SHA1.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
+		Tcl_DeleteInterp(interp);
+
+		return(NULL);
+	}
+
+	tcl_ret = Tcl_Eval(interp, "package ifneeded appfsd 1.0 [list load {} appfsd]");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl AppFS Package.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
+		Tcl_DeleteInterp(interp);
+
+		return(NULL);
+	}
+
+	/*
+	 * Load "pki.tcl" in the same way as appfsd.tcl (see below)
+	 */
+	tcl_ret = Tcl_Eval(interp, ""
+#include "pki.tcl.h"
+	"");
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "Unable to initialize Tcl PKI.  Aborting.\n");
+		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
+		Tcl_DeleteInterp(interp);
+
+		return(NULL);
+	}
+
+	/*
+	 * Load the "appfsd.tcl" script, which is "compiled" into a C header
+	 * so that it does not need to exist on the filesystem and can be
+	 * directly evaluated.
+	 */
 	tcl_ret = Tcl_Eval(interp, ""
 #include "appfsd.tcl.h"
 	"");
@@ -109,38 +177,91 @@ static Tcl_Interp *appfs_create_TclInterp(const char *cachedir) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
 	}
 
-	if (Tcl_SetVar(interp, "::appfs::cachedir", cachedir, TCL_GLOBAL_ONLY) == NULL) {
+	/*
+	 * Set global variables from C to Tcl
+	 */
+	if (Tcl_SetVar(interp, "::appfs::cachedir", appfs_cachedir, TCL_GLOBAL_ONLY) == NULL) {
 		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
 
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
 	}
 
+	/*
+	 * Initialize the "appfsd.tcl" environment, which must be done after
+	 * global variables are set.
+	 */
 	tcl_ret = Tcl_Eval(interp, "::appfs::init");
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
 		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
 
+		if (error_string) {
+			*error_string = strdup(Tcl_GetStringResult(interp));
+		}
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
 	}
 
-	Tcl_HideCommand(interp, "glob", "glob");
-	Tcl_HideCommand(interp, "exec", "exec");
-	Tcl_HideCommand(interp, "pid", "pid");
+	/*
+	 * Hide some Tcl commands that we do not care to use and which may
+	 * slow down run-time operations.
+	 */
 	Tcl_HideCommand(interp, "auto_load_index", "auto_load_index");
 	Tcl_HideCommand(interp, "unknown", "unknown");
+
+	/*
+	 * Return the completely initialized interpreter
+	 */
+	return(interp);
+}
+
+/*
+ * Return the thread-specific Tcl interpreter, creating it if needed
+ */
+static Tcl_Interp *appfs_TclInterp(void) {
+	Tcl_Interp *interp;
+	int pthread_ret;
+
+	interp = pthread_getspecific(interpKey);
+	if (interp == NULL) {
+		interp = appfs_create_TclInterp(NULL);
+
+		if (interp == NULL) {
+			return(NULL);
+		}
+
+		pthread_ret = pthread_setspecific(interpKey, interp);
+		if (pthread_ret != 0) {
+			Tcl_DeleteInterp(interp);
+
+			return(NULL);
+		}
+	}
 
 	return(interp);
 }
 
+/*
+ * Evaluate a Tcl script constructed by concatenating a bunch of C strings
+ * together.
+ */
 static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	Tcl_Obj **objv;
 	const char *arg;
@@ -179,108 +300,67 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	return(retval);
 }
 
-static void appfs_update_index(const char *hostname) {
-	Tcl_Interp *interp;
-	int tcl_ret;
-
-	APPFS_DEBUG("Enter: hostname = %s", hostname);
-
-	interp = pthread_getspecific(interpKey);
-	if (interp == NULL) {
-		interp = appfs_create_TclInterp(globalThread.cachedir);
-
-		if (interp == NULL) {
-			return;
-		}
-
-		pthread_setspecific(interpKey, interp);
-	}
-
-	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getindex", hostname);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getindex failed: %s", Tcl_GetStringResult(interp));
-
-		return;
-	}
-
-	return;
-}
-
-static const char *appfs_getfile(const char *hostname, const char *sha1) {
-	Tcl_Interp *interp;
-	char *retval;
-	int tcl_ret;
-
-	interp = pthread_getspecific(interpKey);
-	if (interp == NULL) {
-		interp = appfs_create_TclInterp(globalThread.cachedir);
-
-		if (interp == NULL) {
-			return(NULL);
-		}
-
-		pthread_setspecific(interpKey, interp);
-	}
-
-	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::download", hostname, sha1);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::download failed: %s", Tcl_GetStringResult(interp));
-
-		return(NULL);
-	}
-
-	retval = strdup(Tcl_GetStringResult(interp));
-
-	return(retval);
-}
-
-static void appfs_update_manifest(const char *hostname, const char *sha1) {
-	Tcl_Interp *interp;
-	int tcl_ret;
-
-	interp = pthread_getspecific(interpKey);
-	if (interp == NULL) {
-		interp = appfs_create_TclInterp(globalThread.cachedir);
-
-		if (interp == NULL) {
-			return;
-		}
-
-		pthread_setspecific(interpKey, interp);
-	}
-
-	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::getpkgmanifest", hostname, sha1);
-	if (tcl_ret != TCL_OK) {
-		APPFS_DEBUG("Call to ::appfs::getpkgmanifest failed: %s", Tcl_GetStringResult(interp));
-
-		return;
-	}
-
-	return;
-}
-
-#define appfs_free_list_type(id, type) static void appfs_free_list_ ## id(type *head) { \
-	type *obj, *next; \
-	for (obj = head; obj; obj = next) { \
-		next = obj->_next; \
-		ckfree((void *) obj); \
-	} \
-}
-
-appfs_free_list_type(children, struct appfs_children)
-
+/*
+ * Determine the UID for the user making the current FUSE filesystem request.
+ * This will be used to lookup the user's home directory so we can search for
+ * locally modified files.
+ */
 static uid_t appfs_get_fsuid(void) {
 	struct fuse_context *ctx;
 
+	if (!appfs_fuse_started) {
+		return(getuid());
+	}
+
 	ctx = fuse_get_context();
 	if (ctx == NULL) {
+		/* Unable to lookup user for some reason */
+		/* Return an unprivileged user ID */
 		return(1);
 	}
 
 	return(ctx->uid);
 }
 
-static const char *appfs_get_homedir(uid_t fsuid) {
+/*
+ * Determine the GID for the user making the current FUSE filesystem request.
+ * This will be used to lookup the user's home directory so we can search for
+ * locally modified files.
+ */
+static gid_t appfs_get_fsgid(void) {
+	struct fuse_context *ctx;
+
+	if (!appfs_fuse_started) {
+		return(getgid());
+	}
+
+	ctx = fuse_get_context();
+	if (ctx == NULL) {
+		/* Unable to lookup user for some reason */
+		/* Return an unprivileged user ID */
+		return(1);
+	}
+
+	return(ctx->gid);
+}
+
+static void appfs_simulate_user_fs_enter(void) {
+	setfsuid(appfs_get_fsuid());
+	setfsgid(appfs_get_fsgid());
+}
+
+static void appfs_simulate_user_fs_leave(void) {
+	setfsuid(0);
+	setfsgid(0);
+}
+
+/*
+ * Look up the home directory for a given UID
+ *        Returns a C string containing the user's home directory or NULL if
+ *        the user's home directory does not exist or is not correctly
+ *        configured
+ */
+static char *appfs_get_homedir(uid_t fsuid) {
 	struct passwd entry, *result;
 	struct stat stbuf;
 	char buf[1024], *retval;
@@ -322,440 +402,74 @@ static const char *appfs_get_homedir(uid_t fsuid) {
 		return(NULL);
 	}
 
-	retval = sqlite3_mprintf("%s", result->pw_dir);
+	retval = strdup(result->pw_dir);
 
 	return(retval);
 }
 
-static int appfs_getpackage_name_cb(void *_package_name, int columns, char **values, char **names) {
-	char **package_name;
-
-	if (columns != 1) {
-		return(1);
-	}
-
-	package_name = _package_name;
-
-	*package_name = sqlite3_mprintf("%s", values[0]);
-
-	return(0);
-}
-
-static char *appfs_getpackage_name(const char *hostname, const char *package_hash) {
-	char *sql;
-	int sqlite_ret;
-	char *package_name = NULL;
-
-	sql = sqlite3_mprintf("SELECT package FROM packages WHERE hostname = %Q AND sha1 = %Q LIMIT 1;", hostname, package_hash);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		return(sqlite3_mprintf("%s", "unknown-package-name"));
-	}
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getpackage_name_cb, &package_name, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(sqlite3_mprintf("%s", "unknown-package-name"));
-	}
-
-	return(package_name);
-}
-
-static struct appfs_children *appfs_getchildren_fs(struct appfs_children *in_children, const char *fspath) {
-	APPFS_DEBUG("Searching %s", fspath);
-
-	return(in_children);
-}
-
-static int appfs_getchildren_cb(void *_head, int columns, char **values, char **names) {
-	struct appfs_children **head_p, *obj;
-
-	head_p = _head;
-
-	obj = (void *) ckalloc(sizeof(*obj));
-
-	snprintf(obj->name, sizeof(obj->name), "%s", values[0]);
-
-	if (*head_p == NULL) {
-		obj->counter = 0;
-	} else {
-		obj->counter = (*head_p)->counter + 1;
-	}
-
-	obj->_next = *head_p;
-	*head_p = obj;
-
-	return(0);
-	
-}
-
-static struct appfs_children *appfs_getchildren(const char *hostname, const char *package_hash, const char *path, int *children_count_p) {
-	struct appfs_children *head = NULL;
-	char *sql, *filebuf, *homedir = NULL;
-	int sqlite_ret;
+/*
+ * Tcl interface to get the home directory for the user making the "current"
+ * FUSE I/O request
+ */
+static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	char *homedir;
+	Tcl_Obj *homedir_obj;
 	uid_t fsuid;
+	static __thread Tcl_Obj *last_homedir_obj = NULL;
+	static __thread uid_t last_fsuid = -1;
 
-	if (children_count_p == NULL) {
-		return(NULL);
-	}
+        if (objc != 1) {
+                Tcl_WrongNumArgs(interp, 1, objv, NULL);
+                return(TCL_ERROR);
+        }
 
-	appfs_update_index(hostname);
-	appfs_update_manifest(hostname, package_hash);
+	fsuid = appfs_get_fsuid();
 
-	sql = sqlite3_mprintf("SELECT file_name FROM files WHERE package_sha1 = %Q AND file_directory = %Q;", package_hash, path);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		return(NULL);
-	}
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getchildren_cb, &head, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		appfs_free_list_children(head);
-
-		return(NULL);
-	}
-
-	if (globalThread.options.writable) {
-		/* Determine user of process accessing this file */
-		fsuid = appfs_get_fsuid();
-
-		/* Check filesystem paths for updated files */
-		/** Check the global directory (/etc) **/
-		filebuf = sqlite3_mprintf("/etc/appfs/%z@%s/%s", appfs_getpackage_name(hostname, package_hash), hostname, path);
-		if (filebuf == NULL) {
-			APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-			return(NULL);
-		}
-
-		head = appfs_getchildren_fs(head, filebuf);
-
-		sqlite3_free(filebuf);
-
-		/** Check the user's directory, if we are not root **/
-		if (fsuid != 0) {
-			homedir = (char *) appfs_get_homedir(fsuid);
-		}
-
-		if (homedir != NULL) {
-			filebuf = sqlite3_mprintf("%z/.appfs/%z@%s/%s", homedir, appfs_getpackage_name(hostname, package_hash), hostname, path);
-
-			if (filebuf == NULL) {
-				APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-				return(NULL);
-			}
-
-			head = appfs_getchildren_fs(head, filebuf);
-
-			sqlite3_free(filebuf);
-		}
-	}
-
-	if (head != NULL) {
-		*children_count_p = head->counter + 1;
+	if (fsuid == last_fsuid && last_homedir_obj != NULL) {
+		homedir_obj = last_homedir_obj;
 	} else {
-		*children_count_p = 0;
-	}
-
-	return(head);
-}
-
-static int appfs_sqlite3_query_cb(void *_cb_handle, int columns, char **values, char **names) {
-	struct appfs_sqlite3_query_cb_handle *cb_handle;
-	struct appfs_children *obj;
-
-	cb_handle = _cb_handle;
-
-	obj = (void *) ckalloc(sizeof(*obj));
-
-	switch (cb_handle->argc) {
-		case 1:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0]);
-			break;
-		case 2:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0], values[1]);
-			break;
-		case 3:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0], values[1], values[2]);
-			break;
-		case 4:
-			snprintf(obj->name, sizeof(obj->name), cb_handle->fmt, values[0], values[1], values[2], values[3]);
-			break;
-	}
-
-	if (cb_handle->head == NULL) {
-		obj->counter = 0;
-	} else {
-		obj->counter = cb_handle->head->counter + 1;
-	}
-
-	obj->_next = cb_handle->head;
-	cb_handle->head = obj;
-
-	return(0);
-}
-
-static struct appfs_children *appfs_sqlite3_query(char *sql, int argc, const char *fmt, int *results_count_p) {
-	struct appfs_sqlite3_query_cb_handle cb_handle;
-	int sqlite_ret;
-
-	if (results_count_p == NULL) {
-		return(NULL);
-	}
-
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf probably failed.");
-
-		return(NULL);
-	}
-
-	if (fmt == NULL) {
-		fmt = "%s";
-	}
-
-	cb_handle.head = NULL;
-	cb_handle.argc = argc;
-	cb_handle.fmt  = fmt;
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_sqlite3_query_cb, &cb_handle, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(NULL);
-	}
-
-	if (cb_handle.head != NULL) {
-		*results_count_p = cb_handle.head->counter + 1;
-	}
-
-	return(cb_handle.head);
-}
-
-static int appfs_lookup_package_hash_cb(void *_retval, int columns, char **values, char **names) {
-	char **retval = _retval;
-
-	*retval = strdup(values[0]);
-
-	return(0);
-}
-
-static char *appfs_lookup_package_hash(const char *hostname, const char *package, const char *os, const char *cpuArch, const char *version) {
-	char *sql;
-	char *retval = NULL;
-	int sqlite_ret;
-
-	appfs_update_index(hostname);
-
-	sql = sqlite3_mprintf("SELECT sha1 FROM packages WHERE hostname = %Q AND package = %Q AND os = %Q AND cpuArch = %Q AND version = %Q;",
-		hostname,
-		package,
-		os,
-		cpuArch,
-		version
-	);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		return(NULL);
-	}
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_lookup_package_hash_cb, &retval, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(NULL);
-	}
-
-	return(retval);
-}
-
-static int appfs_getfileinfo_cb(void *_pathinfo, int columns, char **values, char **names) {
-	struct appfs_pathinfo *pathinfo = _pathinfo;
-	const char *type, *time, *source, *size, *perms, *sha1, *rowid;
-
-	type = values[0];
-	time = values[1];
-	source = values[2];
-	size = values[3];
-	perms = values[4];
-	sha1 = values[5];
-	rowid = values[6];
-
-	pathinfo->time = strtoull(time, NULL, 10);
-
-	/* Package file inodes start at 2^32, fake inodes are before then */
-	pathinfo->inode = strtoull(rowid, NULL, 10) + 4294967296ULL;
-
-	if (strcmp(type, "file") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_FILE;
-
-		if (!size) {
-			size = "0";
+		if (last_homedir_obj != NULL) {
+			Tcl_DecrRefCount(last_homedir_obj);
 		}
 
-		if (!perms) {
-			perms = "";
+		homedir = appfs_get_homedir(appfs_get_fsuid());
+
+		if (homedir == NULL) {
+			return(TCL_ERROR);
 		}
 
-		if (!sha1) {
-			sha1 = "";
-		}
+		homedir_obj = Tcl_NewStringObj(homedir, -1);
 
-		pathinfo->typeinfo.file.size = strtoull(size, NULL, 10);
-		snprintf(pathinfo->typeinfo.file.sha1, sizeof(pathinfo->typeinfo.file.sha1), "%s", sha1);
+		free(homedir);
 
-		if (strcmp(perms, "x") == 0) {
-			pathinfo->typeinfo.file.executable = 1;
-		} else {
-			pathinfo->typeinfo.file.executable = 0;
-		}
+		last_homedir_obj = homedir_obj;
+		last_fsuid = fsuid;
 
-		return(0);
+		Tcl_IncrRefCount(last_homedir_obj);
 	}
 
-	if (strcmp(type, "directory") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-		pathinfo->typeinfo.dir.childcount = 0;
+       	Tcl_SetObjResult(interp, homedir_obj);
 
-		return(0);
-	}
-
-	if (strcmp(type, "symlink") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_SYMLINK;
-		pathinfo->typeinfo.dir.childcount = 0;
-
-		if (!source) {
-			source = ".BADLINK";
-		}
-
-		pathinfo->typeinfo.symlink.size = strlen(source);
-		snprintf(pathinfo->typeinfo.symlink.source, sizeof(pathinfo->typeinfo.symlink.source), "%s", source);
-
-		return(0);
-	}
-
-	return(0);
-
-	/* Until this is used, prevent the compiler from complaining */
-	source = source;
+        return(TCL_OK);
 }
 
-static int appfs_getfileinfo(const char *hostname, const char *package_hash, const char *_path, struct appfs_pathinfo *pathinfo) {
-	char *directory, *file, *path;
-	char *sql;
-	int sqlite_ret;
+static int tcl_appfs_simulate_user_fs_enter(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	appfs_simulate_user_fs_enter();
 
-	if (pathinfo == NULL) {
-		return(-EIO);
-	}
-
-	appfs_update_index(hostname);
-	appfs_update_manifest(hostname, package_hash);
-
-	path = strdup(_path);
-	directory = path;
-	file = strrchr(path, '/');
-	if (file == NULL) {
-		file = path;
-		directory = "";
-	} else {
-		*file = '\0';
-		file++;
-	}
-
-	sql = sqlite3_mprintf("SELECT type, time, source, size, perms, file_sha1, rowid FROM files WHERE package_sha1 = %Q AND file_directory = %Q AND file_name = %Q;", package_hash, directory, file);
-	if (sql == NULL) {
-		APPFS_DEBUG("Call to sqlite3_mprintf failed.");
-
-		free(path);
-
-		return(-EIO);
-	}
-
-	free(path);
-
-	pathinfo->type = APPFS_PATHTYPE_INVALID;
-
-	APPFS_DEBUG("SQL: %s", sql);
-	sqlite_ret = sqlite3_exec(globalThread.db, sql, appfs_getfileinfo_cb, pathinfo, NULL);
-	sqlite3_free(sql);
-
-	if (sqlite_ret != SQLITE_OK) {
-		APPFS_DEBUG("Call to sqlite3_exec failed.");
-
-		return(-EIO);
-	}
-
-	if (pathinfo->type == APPFS_PATHTYPE_INVALID) {
-		return(-ENOENT);
-	}
-
-	return(0);
+	return(TCL_OK);
 }
 
-static int appfs_get_path_info_sql(char *sql, int argc, const char *fmt, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
-	struct appfs_children *node, *dir_children, *dir_child;
-	int dir_children_count = 0;
+static int tcl_appfs_simulate_user_fs_leave(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	appfs_simulate_user_fs_leave();
 
-	dir_children = appfs_sqlite3_query(sql, argc, fmt, &dir_children_count);
-
-	if (dir_children == NULL || dir_children_count == 0) {
-		return(-ENOENT);
-	}
-
-	/* Request for a single hostname */
-	pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-	pathinfo->typeinfo.dir.childcount = dir_children_count;
-	pathinfo->time = globalThread.boottime;
-
-	if (children) {
-		for (dir_child = dir_children; dir_child; dir_child = dir_child->_next) {
-			node = (void *) ckalloc(sizeof(*node));
-			node->_next = *children;
-			strcpy(node->name, dir_child->name);
-			*children = node;
-		}
-	}
-
-	appfs_free_list_children(dir_children);
-
-	return(0);
+	return(TCL_OK);
 }
 
-static int appfs_add_path_child(const char *name, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
-	struct appfs_children *new_child;
-
-	pathinfo->typeinfo.dir.childcount++;
-
-	if (children) {
-		new_child = (void *) ckalloc(sizeof(*new_child));
-		new_child->_next = *children;
-
-		snprintf(new_child->name, sizeof(new_child->name), "%s", name);
-
-		*children = new_child;
-	}
-
-	return(0);
-}
-
-/* Generate an inode for a given path */
+/*
+ * Generate an inode for a given path.  The inode should be computed in such
+ * a way that it is unlikely to be duplicated and remains the same for a given
+ * file
+ */
 static long long appfs_get_path_inode(const char *path) {
 	long long retval;
 	const char *p;
@@ -775,210 +489,198 @@ static long long appfs_get_path_inode(const char *path) {
 }
 
 /* Get information about a path, and optionally list children */
-static int appfs_get_path_info(const char *_path, struct appfs_pathinfo *pathinfo, struct appfs_children **children) {
-	struct appfs_children *dir_children;
-	char *hostname, *packagename, *os_cpuArch, *os, *cpuArch, *version;
-	char *path, *path_s;
-	char *package_hash;
-	char *sql;
-	int files_count;
-	int fileinfo_ret, retval;
+static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo) {
+	Tcl_Interp *interp;
+	Tcl_Obj *attrs_dict, *attr_value;
+	const char *attr_value_str;
+	Tcl_WideInt attr_value_wide;
+	int attr_value_int;
+	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL, *attr_key_packaged = NULL;
+	int tcl_ret;
 
-	/* Initialize return */
-	if (children) {
-		*children = NULL;
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(-EIO);
 	}
 
-	/* Verify that this is a valid request */
-	if (_path == NULL) {
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getattr", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
 		return(-ENOENT);
 	}
 
-	if (_path[0] != '/') {
-		return(-ENOENT);
+	if (attr_key_type == NULL) {
+		attr_key_type       = Tcl_NewStringObj("type", -1);
+		attr_key_perms      = Tcl_NewStringObj("perms", -1);
+		attr_key_size       = Tcl_NewStringObj("size", -1);
+		attr_key_time       = Tcl_NewStringObj("time", -1);
+		attr_key_source     = Tcl_NewStringObj("source", -1);
+		attr_key_childcount = Tcl_NewStringObj("childcount", -1);
+		attr_key_packaged   = Tcl_NewStringObj("packaged", -1);
 	}
 
-	/* Note that this is not a "real" directory from a package */
+	attrs_dict = Tcl_GetObjResult(interp);
+	tcl_ret = Tcl_DictObjGet(interp, attrs_dict, attr_key_type, &attr_value);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("[dict get \"type\"] failed");
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(-EIO);
+	}
+
+	if (attr_value == NULL) {
+		return(-EIO);
+	}
+
 	pathinfo->packaged = 0;
-
-	if (_path[1] == '\0') {
-		/* Request for the root directory */
-		pathinfo->hostname[0] = '\0';
-		pathinfo->inode = 1;
-
-		sql = sqlite3_mprintf("SELECT DISTINCT hostname FROM packages;");
-
-		retval = appfs_get_path_info_sql(sql, 1, NULL, pathinfo, children);
-
-		/* The root directory always exists, even if it has no subordinates */
-		if (retval != 0) {
-			pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-			pathinfo->typeinfo.dir.childcount = 0;
-			pathinfo->time = globalThread.boottime;
-
-			retval = 0;
-		}
-
-		return(retval);
-	}
-
-	path = strdup(_path);
-	path_s = path;
-
 	pathinfo->inode = appfs_get_path_inode(path);
 
-	hostname = path + 1;
-	packagename = strchr(hostname, '/');
-
-	if (packagename != NULL) {
-		*packagename = '\0';
-		packagename++;
-	}
-
-	snprintf(pathinfo->hostname, sizeof(pathinfo->hostname), "%s", hostname);
-
-	if (packagename == NULL) {
-		appfs_update_index(hostname);
-
-		sql = sqlite3_mprintf("SELECT DISTINCT package FROM packages WHERE hostname = %Q;", hostname);
-
-		free(path_s);
-
-		return(appfs_get_path_info_sql(sql, 1, NULL, pathinfo, children));
-	}
-
-	os_cpuArch = strchr(packagename, '/');
-
-	if (os_cpuArch != NULL) {
-		*os_cpuArch = '\0';
-		os_cpuArch++;
-	}
-
-	if (os_cpuArch == NULL) {
-		appfs_update_index(hostname);
-
-		sql = sqlite3_mprintf("SELECT DISTINCT os, cpuArch FROM packages WHERE hostname = %Q AND package = %Q;", hostname, packagename);
-
-		free(path_s);
-
-		retval = appfs_get_path_info_sql(sql, 2, "%s-%s", pathinfo, children);
-
-		if (retval != 0) {
-			return(retval);
-		}
-
-		appfs_add_path_child("platform", pathinfo, children);
-
-		return(retval);
-	}
-
-	version = strchr(os_cpuArch, '/');
-
-	if (version != NULL) {
-		*version = '\0';
-		version++;
-	}
-
-	os = os_cpuArch;
-	cpuArch = strchr(os_cpuArch, '-');
-	if (cpuArch) {
-		*cpuArch = '\0';
-		cpuArch++;
-	} else {
-		cpuArch = "";
-	}
-
-	if (version == NULL) {
-		if (strcmp(os, "platform") == 0 && strcmp(cpuArch, "") == 0) {
-			pathinfo->type = APPFS_PATHTYPE_SYMLINK;
-			pathinfo->time = globalThread.boottime;
+	attr_value_str = Tcl_GetString(attr_value);
+	switch (attr_value_str[0]) {
+		case 'd': /* directory */
+			pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
 			pathinfo->typeinfo.dir.childcount = 0;
-			pathinfo->typeinfo.symlink.size = strlen(globalThread.platform);
 
-			snprintf(pathinfo->typeinfo.symlink.source, sizeof(pathinfo->typeinfo.symlink.source), "%s", globalThread.platform);
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_childcount, &attr_value);
+			if (attr_value != NULL) {
+				tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+				if (tcl_ret == TCL_OK) {
+					pathinfo->typeinfo.dir.childcount = attr_value_wide;
+				}
+			}
 
-			free(path_s);
+			break;
+		case 'f': /* file */
+			pathinfo->type = APPFS_PATHTYPE_FILE;
+			pathinfo->typeinfo.file.size = 0;
+			pathinfo->typeinfo.file.executable = 0;
 
-			return(0);
-		}
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_size, &attr_value);
+			if (attr_value != NULL) {
+				tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+				if (tcl_ret == TCL_OK) {
+					pathinfo->typeinfo.file.size = attr_value_wide;
+				}
+			}
 
-		/* Request for version list for a package on an OS/CPU */
-		appfs_update_index(hostname);
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_perms, &attr_value);
+			if (attr_value != NULL) {
+				attr_value_str = Tcl_GetString(attr_value);
+				if (attr_value_str[0] == 'x') {
+					pathinfo->typeinfo.file.executable = 1;
+				}
+			}
+			break;
+		case 's': /* symlink */
+			pathinfo->type = APPFS_PATHTYPE_SYMLINK;
+			pathinfo->typeinfo.symlink.size = 0;
+			pathinfo->typeinfo.symlink.source[0] = '\0';
 
-		sql = sqlite3_mprintf("SELECT DISTINCT version FROM packages WHERE hostname = %Q AND package = %Q AND os = %Q and cpuArch = %Q;", hostname, packagename, os, cpuArch);
+			Tcl_DictObjGet(interp, attrs_dict, attr_key_source, &attr_value);
+			if (attr_value != NULL) {
+				attr_value_str = Tcl_GetStringFromObj(attr_value, &attr_value_int); 
 
-		free(path_s);
+				if ((attr_value_int + 1) <= sizeof(pathinfo->typeinfo.symlink.source)) {
+					pathinfo->typeinfo.symlink.size = attr_value_int;
+					pathinfo->typeinfo.symlink.source[attr_value_int] = '\0';
 
-		return(appfs_get_path_info_sql(sql, 1, NULL, pathinfo, children));
+					memcpy(pathinfo->typeinfo.symlink.source, attr_value_str, attr_value_int);
+				}
+			}
+			break;
+		case 'F': /* pipe/fifo */
+			pathinfo->type = APPFS_PATHTYPE_FIFO;
+			break;
+		case 'S': /* UNIX domain socket */
+			pathinfo->type = APPFS_PATHTYPE_SOCKET;
+			break;
+		default:
+			return(-EIO);
 	}
 
-	path = strchr(version, '/');
-	if (path == NULL) {
-		path = "";
+	Tcl_DictObjGet(interp, attrs_dict, attr_key_packaged, &attr_value);
+	if (attr_value != NULL) {
+		pathinfo->packaged = 1;
+	}
+
+	Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
+	if (attr_value != NULL) {
+		tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+		if (tcl_ret == TCL_OK) {
+			pathinfo->time = attr_value_wide;
+		}
 	} else {
-		*path = '\0';
-		path++;
+		pathinfo->time = 0;
 	}
-
-	/* Request for a file in a specific package */
-	pathinfo->packaged = 1;
-	APPFS_DEBUG("Requesting information for hostname = %s, package = %s, os = %s, cpuArch = %s, version = %s, path = %s", 
-		hostname, packagename, os, cpuArch, version, path
-	);
-
-	package_hash = appfs_lookup_package_hash(hostname, packagename, os, cpuArch, version);
-	if (package_hash == NULL) {
-		free(path_s);
-
-		return(-ENOENT);
-	}
-
-	APPFS_DEBUG("  ... which hash a hash of %s", package_hash);
-
-	appfs_update_manifest(hostname, package_hash);
-
-	if (strcmp(path, "") == 0) {
-		pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-		pathinfo->time = globalThread.boottime;
-	} else {
-		fileinfo_ret = appfs_getfileinfo(hostname, package_hash, path, pathinfo);
-		if (fileinfo_ret != 0) {
-			free(path_s);
-
-			return(fileinfo_ret);
-		}
-	}
-
-	if (pathinfo->type == APPFS_PATHTYPE_DIRECTORY) {
-		dir_children = appfs_getchildren(hostname, package_hash, path, &files_count);
-
-		if (dir_children != NULL) {
-			pathinfo->typeinfo.dir.childcount = files_count;
-		}
-
-		if (children) {
-			*children = dir_children;
-		} else {
-			appfs_free_list_children(dir_children);
-		}
-	}
-
-	free(path_s);
 
 	return(0);
 }
 
+static char *appfs_prepare_to_create(const char *path) {
+	Tcl_Interp *interp;
+	const char *real_path;
+	int tcl_ret;
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(NULL);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::prepare_to_create", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::prepare_to_create(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(NULL);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
+	if (real_path == NULL) {
+		return(NULL);
+	}
+
+	return(strdup(real_path));
+}
+
+static char *appfs_localpath(const char *path) {
+	Tcl_Interp *interp;
+	const char *real_path;
+	int tcl_ret;
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(NULL);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::localpath", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::localpath(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(NULL);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
+	if (real_path == NULL) {
+		return(NULL);
+	}
+
+	return(strdup(real_path));
+}
+
 static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
 	struct appfs_pathinfo pathinfo;
-	int res = 0;
+	int retval = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
 	pathinfo.type = APPFS_PATHTYPE_INVALID;
 
-	res = appfs_get_path_info(path, &pathinfo, NULL);
-	if (res != 0) {
-		return(res);
+	retval = appfs_get_path_info(path, &pathinfo);
+	if (retval != 0) {
+		return(retval);
 	}
 
 	if (pathinfo.type != APPFS_PATHTYPE_SYMLINK) {
@@ -996,15 +698,17 @@ static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
 
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	struct appfs_pathinfo pathinfo;
-	int res = 0;
+	int retval;
+
+	retval = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
 	pathinfo.type = APPFS_PATHTYPE_INVALID;
 
-	res = appfs_get_path_info(path, &pathinfo, NULL);
-	if (res != 0) {
-		return(res);
+	retval = appfs_get_path_info(path, &pathinfo);
+	if (retval != 0) {
+		return(retval);
 	}
 
 	memset(stbuf, 0, sizeof(struct stat));
@@ -1014,6 +718,8 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_atime = pathinfo.time;
 	stbuf->st_ino   = pathinfo.inode;
 	stbuf->st_mode  = 0;
+	stbuf->st_uid   = appfs_get_fsuid();
+	stbuf->st_gid   = appfs_get_fsgid();
 
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
@@ -1035,73 +741,125 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			stbuf->st_nlink = 1;
 			stbuf->st_size = pathinfo.typeinfo.symlink.size;
 			break;
+		case APPFS_PATHTYPE_SOCKET:
+			stbuf->st_mode = S_IFSOCK | 0555;
+			stbuf->st_nlink = 1;
+			stbuf->st_size = 0;
+			break;
+		case APPFS_PATHTYPE_FIFO:
+			stbuf->st_mode = S_IFIFO | 0555;
+			stbuf->st_nlink = 1;
+			stbuf->st_size = 0;
+			break;
 		case APPFS_PATHTYPE_INVALID:
-			res = -EIO;
+			retval = -ENOENT;
 
 			break;
 	}
 
 	if (pathinfo.packaged) {
-		if (globalThread.options.writable) {
-			stbuf->st_mode |= 0222;
-		}
+		stbuf->st_mode |= 0222;
 	}
 
-	return res;
+	return(retval);
 }
 
 static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
-	struct appfs_pathinfo pathinfo;
-	struct appfs_children *children, *child;
-	int retval;
+	Tcl_Interp *interp;
+	Tcl_Obj **children;
+	int children_count, idx;
+	int tcl_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	retval = appfs_get_path_info(path, &pathinfo, &children);
-	if (retval != 0) {
-		return(retval);
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(0);
 	}
 
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
 
-	for (child = children; child; child = child->_next) {
-		filler(buf, child->name, NULL, 0);
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getchildren", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::getchildren(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(0);
 	}
 
-	appfs_free_list_children(children);
+	tcl_ret = Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &children_count, &children);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("Parsing list of children on path %s failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(0);
+	}
+
+	for (idx = 0; idx < children_count; idx++) {
+		filler(buf, Tcl_GetString(children[idx]), NULL, 0);
+	}
 
 	return(0);
 }
 
 static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
+	Tcl_Interp *interp;
 	struct appfs_pathinfo pathinfo;
-	const char *real_path;
+	const char *real_path, *mode;
+	int gpi_ret, tcl_ret;
 	int fh;
-	int gpi_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	if ((fi->flags & 3) != O_RDONLY) {
-                return(-EACCES);
-	}
+	gpi_ret = appfs_get_path_info(path, &pathinfo);
 
-	gpi_ret = appfs_get_path_info(path, &pathinfo, NULL);
-	if (gpi_ret != 0) {
-		return(gpi_ret);
+	if ((fi->flags & (O_WRONLY|O_CREAT)) == (O_CREAT|O_WRONLY)) {
+		/* The file will be created if it does not exist */
+		if (gpi_ret != 0 && gpi_ret != -ENOENT) {
+			return(gpi_ret);
+		}
+
+		mode = "create";
+	} else {
+		/* The file must already exist */
+		if (gpi_ret != 0) {
+			return(gpi_ret);
+		}
+
+		mode = "";
+
+		if ((fi->flags & O_WRONLY) == O_WRONLY) {
+			mode = "write";
+		}
 	}
 
 	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {
 		return(-EISDIR);
 	}
 
-	real_path = appfs_getfile(pathinfo.hostname, pathinfo.typeinfo.file.sha1);
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(-EIO);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, mode);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, mode);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(-EIO);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
 	if (real_path == NULL) {
 		return(-EIO);
 	}
 
-	fh = open(real_path, O_RDONLY);
-	free((void *) real_path);
+	APPFS_DEBUG("Translated request to open %s to opening %s (mode = \"%s\")", path, real_path, mode);
+
+	fh = open(real_path, fi->flags, 0600);
+
 	if (fh < 0) {
 		return(-EIO);
 	}
@@ -1138,25 +896,365 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 	return(read_ret);
 }
 
-static struct fuse_operations appfs_oper = {
+static int appfs_fuse_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+	off_t lseek_ret;
+	ssize_t write_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	lseek_ret = lseek(fi->fh, offset, SEEK_SET);
+	if (lseek_ret != offset) {
+		return(-EIO);
+	}
+
+	write_ret = write(fi->fh, buf, size);
+
+	return(write_ret);
+}
+
+static int appfs_fuse_mknod(const char *path, mode_t mode, dev_t device) {
+	char *real_path;
+	int mknod_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	if ((mode & S_IFCHR) == S_IFCHR) {
+		return(-EPERM);
+	}
+
+	if ((mode & S_IFBLK) == S_IFBLK) {
+		return(-EPERM);
+	}
+
+	real_path = appfs_prepare_to_create(path);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	appfs_simulate_user_fs_enter();
+
+	mknod_ret = mknod(real_path, mode, device);
+
+	appfs_simulate_user_fs_leave();
+
+	free(real_path);
+
+	if (mknod_ret != 0) {
+		return(errno * -1);
+	}
+
+	return(0);
+}
+
+static int appfs_fuse_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+	char *real_path;
+	int fd;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	if ((mode & S_IFCHR) == S_IFCHR) {
+		return(-EPERM);
+	}
+
+	if ((mode & S_IFBLK) == S_IFBLK) {
+		return(-EPERM);
+	}
+
+	real_path = appfs_prepare_to_create(path);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	appfs_simulate_user_fs_enter();
+
+	fd = creat(real_path, mode);
+
+	appfs_simulate_user_fs_leave();
+
+	free(real_path);
+
+	if (fd < 0) {
+		return(errno * -1);
+	}
+
+	fi->fh = fd;
+
+	return(0);
+}
+
+static int appfs_fuse_truncate(const char *path, off_t size) {
+	char *real_path;
+	int truncate_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	real_path = appfs_localpath(path);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	appfs_simulate_user_fs_enter();
+
+	truncate_ret = truncate(real_path, size);
+
+	appfs_simulate_user_fs_leave();
+
+	free(real_path);
+
+	if (truncate_ret != 0) {
+		return(errno * -1);
+	}
+
+	return(0);
+}
+
+static int appfs_fuse_unlink_rmdir(const char *path) {
+	Tcl_Interp *interp;
+	int tcl_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(-EIO);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::unlinkpath", path);
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::unlinkpath(%s) failed.", path);
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(-EIO);
+	}
+
+	return(0);
+}
+
+static int appfs_fuse_mkdir(const char *path, mode_t mode) {
+	char *real_path;
+	int mkdir_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+
+	real_path = appfs_prepare_to_create(path);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	appfs_simulate_user_fs_enter();
+
+	mkdir_ret = mkdir(real_path, mode);
+
+	appfs_simulate_user_fs_leave();
+
+	free(real_path);
+
+	if (mkdir_ret != 0) {
+		if (errno != EEXIST) {
+			return(errno * -1);
+		}
+	}
+
+	return(0);
+}
+
+static int appfs_fuse_chmod(const char *path, mode_t mode) {
+	Tcl_Interp *interp;
+	const char *real_path;
+	int tcl_ret, chmod_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(-EIO);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, "write");
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, "write");
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(-EIO);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	appfs_simulate_user_fs_enter();
+
+	chmod_ret = chmod(real_path, mode);
+
+	appfs_simulate_user_fs_leave();
+
+	return(chmod_ret);
+}
+
+/*
+ * SQLite3 mode: Execute raw SQL and return success or failure
+ */
+static int appfs_sqlite3(const char *sql) {
+	Tcl_Interp *interp;
+	const char *sql_ret;
+	int tcl_ret;
+
+	interp = appfs_create_TclInterp(NULL);
+	if (interp == NULL) {
+		fprintf(stderr, "Unable to create a Tcl interpreter.  Aborting.\n");
+
+		return(1);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 5, "::appfs::db", "eval", sql, "row", "unset -nocomplain row(*); parray row; puts \"----\"");
+	sql_ret = Tcl_GetStringResult(interp);
+
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "[error] %s\n", sql_ret);
+
+		return(1);
+	}
+
+	if (sql_ret && sql_ret[0] != '\0') {
+		printf("%s\n", sql_ret);
+	}
+
+	return(0);
+}
+
+/*
+ * Tcl mode: Execute raw Tcl and return success or failure
+ */
+static int appfs_tcl(const char *tcl) {
+	Tcl_Interp *interp;
+	const char *tcl_result;
+	int tcl_ret;
+
+	interp = appfs_create_TclInterp(NULL);
+	if (interp == NULL) {
+		fprintf(stderr, "Unable to create a Tcl interpreter.  Aborting.\n");
+
+		return(1);
+	}
+
+	tcl_ret = Tcl_Eval(interp, tcl);
+	tcl_result = Tcl_GetStringResult(interp);
+
+	if (tcl_ret != TCL_OK) {
+		fprintf(stderr, "[error] %s\n", tcl_result);
+
+		return(1);
+	}
+
+	if (tcl_result && tcl_result[0] != '\0') {
+		printf("%s\n", tcl_result);
+	}
+
+	return(0);
+}
+
+/*
+ * AppFSd Package for Tcl:
+ *         Bridge for I/O operations to request information about the current
+ *         transaction
+ */
+static int Appfsd_Init(Tcl_Interp *interp) {
+#ifdef USE_TCL_STUBS
+	if (Tcl_InitStubs(interp, TCL_VERSION, 0) == 0L) {
+		return(TCL_ERROR);
+	}
+#endif
+
+	Tcl_CreateObjCommand(interp, "appfsd::get_homedir", tcl_appfs_get_homedir, NULL, NULL);
+	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_enter", tcl_appfs_simulate_user_fs_enter, NULL, NULL);
+	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_leave", tcl_appfs_simulate_user_fs_leave, NULL, NULL);
+
+	Tcl_PkgProvide(interp, "appfsd", "1.0");
+
+	return(TCL_OK);
+}
+
+/*
+ * FUSE operations structure
+ */
+static struct fuse_operations appfs_operations = {
 	.getattr   = appfs_fuse_getattr,
 	.readdir   = appfs_fuse_readdir,
 	.readlink  = appfs_fuse_readlink,
 	.open      = appfs_fuse_open,
 	.release   = appfs_fuse_close,
-	.read      = appfs_fuse_read
+	.read      = appfs_fuse_read,
+	.write     = appfs_fuse_write,
+	.mknod     = appfs_fuse_mknod,
+	.create    = appfs_fuse_create,
+	.truncate  = appfs_fuse_truncate,
+	.unlink    = appfs_fuse_unlink_rmdir,
+	.rmdir     = appfs_fuse_unlink_rmdir,
+	.mkdir     = appfs_fuse_mkdir,
+	.chmod     = appfs_fuse_chmod,
 };
 
+/*
+ * FUSE option parsing callback
+ */
+static int appfs_fuse_opt_cb(void *data, const char *arg, int key, struct fuse_args *outargs) {
+	static int seen_cachedir = 0;
+
+	if (key == FUSE_OPT_KEY_NONOPT && seen_cachedir == 0) {
+		seen_cachedir = 1;
+
+		appfs_cachedir = strdup(arg);
+
+		return(0);
+	}
+
+	return(1);
+}
+
+/*
+ * Entry point into this program.
+ */
 int main(int argc, char **argv) {
-	const char *cachedir = APPFS_CACHEDIR;
-	char dbfilename[1024];
-	int pthread_ret, snprintf_ret, sqlite_ret;
+	Tcl_Interp *test_interp;
+	char *test_interp_error;
+	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+	int pthread_ret;
 
-	globalThread.cachedir = cachedir;
-	globalThread.boottime = time(NULL);
-	globalThread.platform = "linux-x86_64";
-	globalThread.options.writable = 1;
+	/*
+	 * Skip passed program name
+	 */
+	if (argc == 0 || argv == NULL) {
+		return(1);
+	}
+	argc--;
+	argv++;
 
+	/*
+	 * Set global variables, these should be configuration options.
+	 */
+	appfs_cachedir = APPFS_CACHEDIR;
+
+	/*
+	 * Set global variable for "boot time" to set a time on directories
+	 * that we fake.
+	 */
+	appfs_boottime = time(NULL);
+
+	/*
+	 * Register "sha1" and "appfsd" package with libtcl so that any new
+	 * interpreters created (which are done dynamically by FUSE) can have
+	 * the appropriate configuration done automatically.
+	 */
+	Tcl_StaticPackage(NULL, "sha1", Sha1_Init, NULL);
+	Tcl_StaticPackage(NULL, "appfsd", Appfsd_Init, NULL);
+
+	/*
+	 * Create a thread-specific-data (TSD) key for each thread to refer
+	 * to its own Tcl interpreter.  Tcl interpreters must be unique per
+	 * thread and new threads are dynamically created by FUSE.
+	 */
 	pthread_ret = pthread_key_create(&interpKey, NULL);
 	if (pthread_ret != 0) {
 		fprintf(stderr, "Unable to create TSD key for Tcl.  Aborting.\n");
@@ -1164,20 +1262,68 @@ int main(int argc, char **argv) {
 		return(1);
 	}
 
-	snprintf_ret = snprintf(dbfilename, sizeof(dbfilename), "%s/%s", cachedir, "cache.db");
-	if (snprintf_ret >= sizeof(dbfilename)) {
-		fprintf(stderr, "Unable to set database filename.  Aborting.\n");
+	/*
+	 * Manually specify cache directory, without FUSE callback
+	 * This option only works when not using FUSE, since we
+	 * do not process it with FUSEs option processing.
+	 */
+	if (argc >= 2) {
+		if (strcmp(argv[0], "--cachedir") == 0) {
+			appfs_cachedir = strdup(argv[1]);
+
+			argc -= 2;
+			argv += 2;
+		}
+	}
+
+	/*
+	 * SQLite3 mode, for running raw SQL against the cache database
+	 */
+	if (argc == 2 && strcmp(argv[0], "--sqlite3") == 0) {
+		return(appfs_sqlite3(argv[1]));
+	}
+
+	/*
+	 * Tcl mode, for running raw Tcl in the same environment AppFSd would
+	 * run code.
+	 */
+	if (argc == 2 && strcmp(argv[0], "--tcl") == 0) {
+		return(appfs_tcl(argv[1]));
+	}
+
+	/*
+	 * Create a Tcl interpreter just to verify that things are in working 
+	 * order before we become a daemon.
+	 */
+	test_interp = appfs_create_TclInterp(&test_interp_error);
+	if (test_interp == NULL) {
+		if (test_interp_error == NULL) {
+			test_interp_error = "Unknown error";
+		}
+
+		fprintf(stderr, "Unable to initialize Tcl interpreter for AppFSd:\n");
+		fprintf(stderr, "%s\n", test_interp_error);
 
 		return(1);
 	}
+	Tcl_DeleteInterp(test_interp);
 
-	sqlite_ret = sqlite3_open(dbfilename, &globalThread.db);
-	if (sqlite_ret != SQLITE_OK) {
-		fprintf(stderr, "Unable to open database: %s\n", dbfilename);
+	/*
+	 * Add FUSE arguments which we always supply
+	 */
+	fuse_opt_parse(&args, NULL, NULL, appfs_fuse_opt_cb);
+	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=60,attr_timeout=3600,intr,big_writes");
 
-		return(1);
+	if (getuid() == 0) {
+		fuse_opt_parse(&args, NULL, NULL, NULL);
+		fuse_opt_add_arg(&args, "-oallow_other");
 	}
 
-	return(fuse_main(argc, argv, &appfs_oper, NULL));
+	/*
+	 * Enter the FUSE main loop -- this will process any arguments
+	 * and start servicing requests.
+	 */
+	appfs_fuse_started = 1;
+	return(fuse_main(args.argc, args.argv, &appfs_operations, NULL));
 }
  
