@@ -7,15 +7,24 @@ package require appfsd
 package require platform
 package require pki
 
+# Functions specifically meant for users to replace as a part of configuration
+namespace eval ::appfs::user {
+	# User-replacable function to convert a hostname/hash/method to an URL
+	proc construct_url {hostname hash method} {
+		return "http://$hostname/appfs/$method/$hash"
+	}
+
+	# User-replaceable function get the home directory of the current user
+	proc get_homedir {} {
+		return [::appfsd::get_homedir]
+	}
+}
+
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
 	variable ttl 3600
 	variable nttl 60
 
-	# User-replacable function to convert a hostname/hash/method to an URL
-	proc _construct_url {hostname hash method} {
-		return "http://$hostname/appfs/$method/$hash"
-	}
 
 	proc _hash_sep {hash {seps 4}} {
 		for {set idx 0} {$idx < $seps} {incr idx} {
@@ -170,7 +179,7 @@ namespace eval ::appfs {
 	}
 
 	proc download {hostname hash {method sha1}} {
-		set url [_construct_url $hostname $hash $method]
+		set url [::appfs::user::construct_url $hostname $hash $method]
 		set file [_cachefile $url $hash]
 
 		if {![file exists $file]} {
@@ -356,7 +365,7 @@ namespace eval ::appfs {
 	proc _localpath {package hostname file} {
 		set dir ""
 		catch {
-			set homedir [::appfsd::get_homedir]
+			set homedir [::appfs::user::get_homedir]
 			set dir [file join $homedir .appfs "./${package}@${hostname}" "./${file}"]
 		}
 		return $dir
@@ -365,7 +374,7 @@ namespace eval ::appfs {
 	proc _whiteoutpath {package hostname file} {
 		set dir ""
 		catch {
-			set homedir [::appfsd::get_homedir]
+			set homedir [::appfs::user::get_homedir]
 			set dir [file join $homedir .appfs "./${package}@${hostname}" ".APPFS.WHITEOUT" "./${file}.APPFS.WHITEOUT"]
 		}
 		return $dir

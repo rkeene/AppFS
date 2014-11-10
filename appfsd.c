@@ -465,6 +465,26 @@ static int tcl_appfs_simulate_user_fs_leave(ClientData cd, Tcl_Interp *interp, i
 	return(TCL_OK);
 }
 
+static int tcl_appfs_get_fsuid(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	uid_t fsuid;
+
+	fsuid = appfs_get_fsuid();
+
+       	Tcl_SetObjResult(interp, Tcl_NewWideIntObj(fsuid));
+
+	return(TCL_OK);
+}
+
+static int tcl_appfs_get_fsgid(ClientData cd, Tcl_Interp *interp, int objc, Tcl_Obj *CONST objv[]) {
+	gid_t fsgid;
+
+	fsgid = appfs_get_fsgid();
+
+       	Tcl_SetObjResult(interp, Tcl_NewWideIntObj(fsgid));
+
+	return(TCL_OK);
+}
+
 /*
  * Generate an inode for a given path.  The inode should be computed in such
  * a way that it is unlikely to be duplicated and remains the same for a given
@@ -718,8 +738,8 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_atime = pathinfo.time;
 	stbuf->st_ino   = pathinfo.inode;
 	stbuf->st_mode  = 0;
-	stbuf->st_uid   = appfs_get_fsuid();
-	stbuf->st_gid   = appfs_get_fsgid();
+	stbuf->st_uid   = 0;
+	stbuf->st_gid   = 0;
 
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
@@ -1168,6 +1188,8 @@ static int Appfsd_Init(Tcl_Interp *interp) {
 #endif
 
 	Tcl_CreateObjCommand(interp, "appfsd::get_homedir", tcl_appfs_get_homedir, NULL, NULL);
+	Tcl_CreateObjCommand(interp, "appfsd::get_fsuid", tcl_appfs_get_fsuid, NULL, NULL);
+	Tcl_CreateObjCommand(interp, "appfsd::get_fsgid", tcl_appfs_get_fsgid, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_enter", tcl_appfs_simulate_user_fs_enter, NULL, NULL);
 	Tcl_CreateObjCommand(interp, "appfsd::simulate_user_fs_leave", tcl_appfs_simulate_user_fs_leave, NULL, NULL);
 
