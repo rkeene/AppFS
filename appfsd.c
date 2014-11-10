@@ -503,12 +503,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		return(-EIO);
 	}
 
-	appfs_simulate_user_fs_enter();
-
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getattr", path);
-
-	appfs_simulate_user_fs_leave();
-
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
@@ -785,12 +780,7 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
 
-	appfs_simulate_user_fs_enter();
-
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getchildren", path);
-
-	appfs_simulate_user_fs_leave();
-
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getchildren(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
@@ -853,12 +843,8 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 		return(-EIO);
 	}
 
-	appfs_simulate_user_fs_enter();
-
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, mode);
 	if (tcl_ret != TCL_OK) {
-		appfs_simulate_user_fs_leave();
-
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, mode);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
@@ -867,16 +853,12 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 
 	real_path = Tcl_GetStringResult(interp);
 	if (real_path == NULL) {
-		appfs_simulate_user_fs_leave();
-
 		return(-EIO);
 	}
 
 	APPFS_DEBUG("Translated request to open %s to opening %s (mode = \"%s\")", path, real_path, mode);
 
 	fh = open(real_path, fi->flags, 0600);
-
-	appfs_simulate_user_fs_leave();
 
 	if (fh < 0) {
 		return(-EIO);
@@ -944,14 +926,12 @@ static int appfs_fuse_mknod(const char *path, mode_t mode, dev_t device) {
 		return(-EPERM);
 	}
 
-	appfs_simulate_user_fs_enter();
-
 	real_path = appfs_prepare_to_create(path);
 	if (real_path == NULL) {
-		appfs_simulate_user_fs_leave();
-
 		return(-EIO);
 	}
+
+	appfs_simulate_user_fs_enter();
 
 	mknod_ret = mknod(real_path, mode, device);
 
@@ -980,14 +960,12 @@ static int appfs_fuse_create(const char *path, mode_t mode, struct fuse_file_inf
 		return(-EPERM);
 	}
 
-	appfs_simulate_user_fs_enter();
-
 	real_path = appfs_prepare_to_create(path);
 	if (real_path == NULL) {
-		appfs_simulate_user_fs_leave();
-
 		return(-EIO);
 	}
+
+	appfs_simulate_user_fs_enter();
 
 	fd = creat(real_path, mode);
 
@@ -1041,12 +1019,7 @@ static int appfs_fuse_unlink_rmdir(const char *path) {
 		return(-EIO);
 	}
 
-	appfs_simulate_user_fs_enter();
-
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::unlinkpath", path);
-
-	appfs_simulate_user_fs_leave();
-
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::unlinkpath(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
@@ -1063,14 +1036,13 @@ static int appfs_fuse_mkdir(const char *path, mode_t mode) {
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	appfs_simulate_user_fs_enter();
 
 	real_path = appfs_prepare_to_create(path);
 	if (real_path == NULL) {
-		appfs_simulate_user_fs_leave();
-
 		return(-EIO);
 	}
+
+	appfs_simulate_user_fs_enter();
 
 	mkdir_ret = mkdir(real_path, mode);
 
@@ -1099,12 +1071,8 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 		return(-EIO);
 	}
 
-	appfs_simulate_user_fs_enter();
-
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, "write");
 	if (tcl_ret != TCL_OK) {
-		appfs_simulate_user_fs_leave();
-
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, "write");
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
@@ -1113,10 +1081,10 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 
 	real_path = Tcl_GetStringResult(interp);
 	if (real_path == NULL) {
-		appfs_simulate_user_fs_leave();
-
 		return(-EIO);
 	}
+
+	appfs_simulate_user_fs_enter();
 
 	chmod_ret = chmod(real_path, mode);
 

@@ -124,6 +124,16 @@ namespace eval ::appfs {
 		return -code error "Unable to normalize CPU: $cpu"
 	}
 
+	proc _as_user {code} {
+		::appfsd::simulate_user_fs_enter
+
+		set retcode [catch [list uplevel $code] retstr]
+
+		::appfsd::simulate_user_fs_leave
+
+		return -code $retcode $retstr
+	}
+
 	proc init {} {
 		if {[info exists ::appfs::init_called]} {
 			return
@@ -160,12 +170,8 @@ namespace eval ::appfs {
 	}
 
 	proc download {hostname hash {method sha1}} {
-		::appfsd::simulate_user_fs_leave
-
 		set url [_construct_url $hostname $hash $method]
 		set file [_cachefile $url $hash]
-
-		::appfsd::simulate_user_fs_enter
 
 		if {![file exists $file]} {
 			return -code error "Unable to fetch (file does not exist: $file)"
@@ -468,31 +474,33 @@ namespace eval ::appfs {
 				set retval [::appfs::db eval {SELECT DISTINCT file_name FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $pathinfo(file);}]
 
 				if {[info exists pathinfo(package)] && [info exists pathinfo(hostname)] && [info exists pathinfo(file)]} {
-					set dir [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
-					set whiteoutdir [string range [_whiteoutpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)] 0 end-15]
+					_as_user {
+						set dir [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
+						set whiteoutdir [string range [_whiteoutpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)] 0 end-15]
 
-					foreach file [glob -nocomplain -tails -directory $whiteoutdir {{.,}*.APPFS.WHITEOUT}] {
-						set remove [string range $file 0 end-15]
-						set idx [lsearch -exact $retval $remove]
-						if {$idx != -1} {
-							set retval [lreplace $retval $idx $idx]
-						}
-					}
-
-					foreach file [glob -nocomplain -tails -directory $dir -types {d f l p s} {{.,}*}] {
-						if {$file == "." || $file == ".."} {
-							continue
+						foreach file [glob -nocomplain -tails -directory $whiteoutdir {{.,}*.APPFS.WHITEOUT}] {
+							set remove [string range $file 0 end-15]
+							set idx [lsearch -exact $retval $remove]
+							if {$idx != -1} {
+								set retval [lreplace $retval $idx $idx]
+							}
 						}
 
-						if {$file == ".APPFS.WHITEOUT"} {
-							continue
-						}
+						foreach file [glob -nocomplain -tails -directory $dir -types {d f l p s} {{.,}*}] {
+							if {$file == "." || $file == ".."} {
+								continue
+							}
 
-						if {[lsearch -exact $retval $file] != -1} {
-							continue
-						}
+							if {$file == ".APPFS.WHITEOUT"} {
+								continue
+							}
 
-						lappend retval $file
+							if {[lsearch -exact $retval $file] != -1} {
+								continue
+							}
+
+							lappend retval $file
+						}
 					}
 				}
 
@@ -515,7 +523,7 @@ namespace eval ::appfs {
 		switch -- $pathinfo(_type) {
 			"toplevel" {
 				set retval(type) directory
-				set retval(childcount) 2;
+				set retval(childcount) 2
 			}
 			"sites" {
 				set check [::appfs::db onecolumn {SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname);}]
@@ -568,7 +576,9 @@ namespace eval ::appfs {
 				if {[file exists $localpath]} {
 					set retval(is_localfile) 1
 					catch {
-						file lstat $localpath localpathinfo
+						_as_user {
+							file lstat $localpath localpathinfo
+						}
 						set retval(time) $localpathinfo(mtime)
 
 						switch -- $localpathinfo(type) {
@@ -579,15 +589,20 @@ namespace eval ::appfs {
 							"file" {
 								set retval(type) "file"
 								set retval(size) $localpathinfo(size)
-								if {[file executable $localpath]} {
-									set retval(perms) "x"
-								} else {
-									set retval(perms) ""
+								_as_user {
+									if {[file executable $localpath]} {
+										set retval(perms) "x"
+									} else {
+										set retval(perms) ""
+									}
 								}
 							}
 							"link" {
 								set retval(type) "symlink"
-								set retval(source) [file readlink $localpath]
+
+								_as_user {
+									set retval(source) [file readlink $localpath]
+								}
 							}
 							"fifo" {
 								# Capitalized so that the first char is unique
@@ -655,23 +670,25 @@ namespace eval ::appfs {
 		set localcachefile [download $pathinfo(hostname) $pkgpathinfo(file_sha1)]
 
 		if {$mode == "write"} {
-			set tmplocalpath "${localpath}.[expr rand()][clock clicks]"
+			_as_user {
+				set tmplocalpath "${localpath}.[expr rand()][clock clicks]"
 
-			set failed 0
-			if {[catch {
-				file mkdir [file dirname $localpath]
-				file copy -force -- $localcachefile $tmplocalpath
+				set failed 0
+				if {[catch {
+					file mkdir [file dirname $localpath]
+					file copy -force -- $localcachefile $tmplocalpath
 
-				if {$pkgpathinfo(perms) == "x"} {
-					file attributes $tmplocalpath -permissions +x
+					if {$pkgpathinfo(perms) == "x"} {
+						file attributes $tmplocalpath -permissions +x
+					}
+
+					file rename -force -- $tmplocalpath $localpath
+				} err]} {
+					set failed 1
 				}
-
-				file rename -force -- $tmplocalpath $localpath
-			} err]} {
-				set failed 1
-			}
-			catch {
-				file delete -force -- $tmplocalpath
+				catch {
+					file delete -force -- $tmplocalpath
+				}
 			}
 
 			if {$failed} {
@@ -723,7 +740,9 @@ namespace eval ::appfs {
 
 		set dirname [file dirname $filename]
 
-		file mkdir $dirname
+		_as_user {
+			file mkdir $dirname
+		}
 
 		return $filename
 	}
@@ -746,7 +765,9 @@ namespace eval ::appfs {
 				}
 			}
 
-			file delete -force -- $localpath
+			_as_user {
+				file delete -force -- $localpath
+			}
 		} elseif {[info exists pathattrs(is_remotefile)]} {
 			if {$pathattrs(type) == "directory"} {
 				set children [getchildren $path]
@@ -761,7 +782,10 @@ namespace eval ::appfs {
 
 		set whiteoutfile $pathattrs(whiteoutpath)
 		set whiteoutdir [file dirname $whiteoutfile]
-		file mkdir $whiteoutdir
-		close [open $whiteoutfile w]
+
+		_as_user {
+			file mkdir $whiteoutdir
+			close [open $whiteoutfile w]
+		}
 	}
 }
