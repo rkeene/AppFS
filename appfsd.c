@@ -428,10 +428,6 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
 	if (fsuid == last_fsuid && last_homedir_obj != NULL) {
 		homedir_obj = last_homedir_obj;
 	} else {
-		if (last_homedir_obj != NULL) {
-			Tcl_DecrRefCount(last_homedir_obj);
-		}
-
 		homedir = appfs_get_homedir(appfs_get_fsuid());
 
 		if (homedir == NULL) {
@@ -441,6 +437,10 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
 		homedir_obj = Tcl_NewStringObj(homedir, -1);
 
 		free(homedir);
+
+		if (last_homedir_obj != NULL) {
+			Tcl_DecrRefCount(last_homedir_obj);
+		}
 
 		last_homedir_obj = homedir_obj;
 		last_fsuid = fsuid;
