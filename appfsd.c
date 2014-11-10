@@ -738,8 +738,6 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_atime = pathinfo.time;
 	stbuf->st_ino   = pathinfo.inode;
 	stbuf->st_mode  = 0;
-	stbuf->st_uid   = 0;
-	stbuf->st_gid   = 0;
 
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
@@ -778,7 +776,9 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	}
 
 	if (pathinfo.packaged) {
-		stbuf->st_mode |= 0222;
+		stbuf->st_uid   = appfs_get_fsuid();
+		stbuf->st_gid   = appfs_get_fsgid();
+		stbuf->st_mode |= 0200;
 	}
 
 	return(retval);
@@ -1334,7 +1334,7 @@ int main(int argc, char **argv) {
 	 * Add FUSE arguments which we always supply
 	 */
 	fuse_opt_parse(&args, NULL, NULL, appfs_fuse_opt_cb);
-	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=60,attr_timeout=3600,intr,big_writes");
+	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,intr,big_writes,hard_remove");
 
 	if (getuid() == 0) {
 		fuse_opt_parse(&args, NULL, NULL, NULL);
