@@ -477,7 +477,11 @@ namespace eval ::appfs {
 					SELECT DISTINCT version FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package) AND os = $pathinfo(os) AND cpuArch = $pathinfo(cpu);
 				}]
 
-				lappend retval "latest"
+				::appfs::db eval {SELECT version FROM packages WHERE isLatest = 1 AND hostname = $pathinfo(hostname) AND package = $pathinfo(package) AND os = $pathinfo(os) AND cpuArch = $pathinfo(cpu) LIMIT 1;} latest_info {}
+
+				if {[info exists latest_info(version)]} {
+					lappend retval "latest"
+				}
 
 				return $retval
 			}
@@ -574,8 +578,12 @@ namespace eval ::appfs {
 			}
 			"versions" {
 				if {$pathinfo(version) == "latest"} {
-					set retval(type) symlink
-					set retval(source) "1.0"
+					::appfs::db eval {SELECT version FROM packages WHERE isLatest = 1 AND hostname = $pathinfo(hostname) AND package = $pathinfo(package) AND os = $pathinfo(os) AND cpuArch = $pathinfo(cpu) LIMIT 1;} latest_info {}
+
+					if {[info exists latest_info(version)]} {
+						set retval(type) symlink
+						set retval(source) $latest_info(version)
+					}
 				} else {
 					if {[info exists pathinfo(package_sha1)] && $pathinfo(package_sha1) != ""} {
 						set retval(type) directory
