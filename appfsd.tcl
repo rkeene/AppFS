@@ -623,10 +623,15 @@ namespace eval ::appfs {
 						set file [lindex $work end]
 
 						if {$directory == "" && $file == ""} {
-							array set retval [list type directory childcount [llength [getchildren $path]]]
+							array set retval [list type directory]
 						}
 
 						::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
+
+						if {$retval(type) == "directory"} {
+							set retval(childcount) [llength [getchildren $path]]
+						}
+
 						unset -nocomplain retval(*)
 					}
 				}
