@@ -631,6 +631,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_atime = pathinfo.time;
 	stbuf->st_ino   = pathinfo.inode;
 	stbuf->st_mode  = 0;
+	stbuf->st_uid   = appfs_get_fsuid();
 
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
@@ -845,24 +846,35 @@ static int appfs_fuse_mknod(const char *path, mode_t mode, dev_t device) {
 }
 
 static int appfs_fuse_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+	char *real_path;
 	int fd;
-	int chmod_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
-	fd = appfs_fuse_open(path, fi);
-	if (fd < 0) {
-		return(fd);
+	if ((mode & S_IFCHR) == S_IFCHR) {
+		return(-EPERM);
 	}
 
-	chmod_ret = fchmod(fd, mode);
-	if (chmod_ret != 0) {
-		close(fd);
+	if ((mode & S_IFBLK) == S_IFBLK) {
+		return(-EPERM);
+	}
 
+	real_path = appfs_prepare_to_create(path);
+	if (real_path == NULL) {
 		return(-EIO);
 	}
 
-	return(fd);
+	fd = creat(real_path, mode);
+
+	free(real_path);
+
+	if (fd < 0) {
+		return(errno * -1);
+	}
+
+	fi->fh = fd;
+
+	return(0);
 }
 
 static int appfs_fuse_truncate(const char *path, off_t size) {
@@ -931,6 +943,36 @@ static int appfs_fuse_mkdir(const char *path, mode_t mode) {
 	}
 
 	return(0);
+}
+
+static int appfs_fuse_chmod(const char *path, mode_t mode) {
+	Tcl_Interp *interp;
+	const char *real_path;
+	int tcl_ret, chmod_ret;
+
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		return(-EIO);
+	}
+
+	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, "write");
+	if (tcl_ret != TCL_OK) {
+		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, "write");
+		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		return(-EIO);
+	}
+
+	real_path = Tcl_GetStringResult(interp);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	chmod_ret = chmod(real_path, mode);
+
+	return(chmod_ret);
 }
 
 /*
@@ -1031,6 +1073,7 @@ static struct fuse_operations appfs_operations = {
 	.unlink    = appfs_fuse_unlink_rmdir,
 	.rmdir     = appfs_fuse_unlink_rmdir,
 	.mkdir     = appfs_fuse_mkdir,
+	.chmod     = appfs_fuse_chmod,
 };
 
 /*
