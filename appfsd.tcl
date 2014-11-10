@@ -523,20 +523,20 @@ namespace eval ::appfs {
 		switch -- $pathinfo(_type) {
 			"toplevel" {
 				set retval(type) directory
-				set retval(childcount) 2
+				set retval(childcount) [llength [getchildren $path]]
 			}
 			"sites" {
 				set check [::appfs::db onecolumn {SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname);}]
 				if {$check == "1"} {
 					set retval(type) directory
-					set retval(childcount) 2;
+					set retval(childcount) [llength [getchildren $path]]
 				}
 			}
 			"packages" {
 				set check [::appfs::db onecolumn {SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package);}]
 				if {$check == "1"} {
 					set retval(type) directory
-					set retval(childcount) 2;
+					set retval(childcount) [llength [getchildren $path]]
 				}
 			}
 			"os-cpu" {
@@ -549,7 +549,7 @@ namespace eval ::appfs {
 					}]
 					if {$check == "1"} {
 						set retval(type) directory
-						set retval(childcount) 2;
+						set retval(childcount) [llength [getchildren $path]]
 					}
 				}
 			}
@@ -560,7 +560,7 @@ namespace eval ::appfs {
 				} else {
 					if {[info exists pathinfo(package_sha1)] && $pathinfo(package_sha1) != ""} {
 						set retval(type) directory
-						set retval(childcount) 2;
+						set retval(childcount) [llength [getchildren $path]]
 					}
 				}
 			}
@@ -584,7 +584,7 @@ namespace eval ::appfs {
 						switch -- $localpathinfo(type) {
 							"directory" {
 								set retval(type) "directory"
-								set retval(childcount) 2
+								set retval(childcount) [llength [getchildren $path]]
 							}
 							"file" {
 								set retval(type) "file"
@@ -623,7 +623,7 @@ namespace eval ::appfs {
 						set file [lindex $work end]
 
 						if {$directory == "" && $file == ""} {
-							array set retval [list type directory childcount 2]
+							array set retval [list type directory childcount [llength [getchildren $path]]]
 						}
 
 						::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
