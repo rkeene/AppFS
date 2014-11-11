@@ -1,10 +1,18 @@
 #! /usr/bin/env bash
 
-pkgsdir="$1"
+if [ "$1" == '--cpio' ]; then
+	mode='file'
+
+	pkgfile="$1"
+else
+	mode='dir'
+
+	pkgsdir="$1"
+fi
 appfsdir="$2"
 
-if [ -z  "${pkgsdir}" -o -z "${appfsdir}" ]; then
-	echo 'Usage: appfs-mk <pkgsdir> <appfsdir>' >&2
+if [ -z "${pkgsdir}" -a -z "${pkgfile}" ] || [ -z "${appfsdir}" ]; then
+	echo 'Usage: appfs-mk {--cpio <pkgfile>|<pkgsdir>} <appfsdir>' >&2
 
 	exit 1
 fi
@@ -87,7 +95,15 @@ function emit_manifest() {
 	done
 }
 
-cd "${pkgsdir}" || exit 1
+case "${mode}" in
+	dir)
+		cd "${pkgsdir}" || exit 1
+		;;
+	file)
+		echo 'Unsupported' >&2
+		exit 1
+		;;
+esac
 
 packagelistfile="${appfsdir}/sha1/${RANDOM}${RANDOM}${RANDOM}${RANDOM}${RANDOM}.tmp"
 for package in *; do
