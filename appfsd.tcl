@@ -353,6 +353,22 @@ namespace eval ::appfs {
 						set fileInfo(source) [lindex $work 0]
 						set work [lrange $work 1 end]
 					}
+					"directory" {
+						# No extra data required
+					}
+					default {
+						# Handle unknown types
+						if {[string index $fileInfo(type) 0] == "#"} {
+							# Metadata type, ignore
+							# it if we don't
+							# understand this type
+							continue
+						} else {
+							# Unknown type,
+							# generate an error
+							error "Manifest cannot be parsed"
+						}
+					}
 				}
 
 				set fileInfo(name) [join $work ","]
