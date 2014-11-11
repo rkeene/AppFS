@@ -309,7 +309,7 @@ namespace eval ::appfs {
 	proc getpkgmanifest {hostname package_sha1} {
 		set haveManifest [db onecolumn {SELECT haveManifest FROM packages WHERE sha1 = $package_sha1 LIMIT 1;}]
 
-		if {$haveManifest} {
+		if {$haveManifest == "1"} {
 			return COMPLETE
 		}
 
