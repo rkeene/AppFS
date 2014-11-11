@@ -134,6 +134,10 @@ case "${mode}" in
 esac
 
 for package in *; do
+	if [ ! -d "${package}" ]; then
+		continue
+	fi
+
 	(
 		cd "${package}" || exit 1
 
