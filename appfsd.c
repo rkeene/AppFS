@@ -1477,7 +1477,25 @@ static void appfs_hot_restart(void) {
 }
 
 /*
- * Signal handler to initiate a hot-restart
+ * Terminate a thread and release resources
+ */
+static void appfs_thread_exit(void) {
+	Tcl_Interp *interp;
+
+	pthread_exit(NULL);
+
+	interp = pthread_getspecific(interpKey);
+	if (interp != NULL) {
+		Tcl_DeleteInterp(interp);
+	}
+
+	return;
+}
+
+/*
+ * Signal handler
+ *         SIGHUP initiates a hot restart
+ *         SIGUSR1 terminates the current thread
  */
 static void appfs_signal_handler(int sig) {
 	/* Do not handle signals until FUSE has been started */
@@ -1485,8 +1503,14 @@ static void appfs_signal_handler(int sig) {
 		return;
 	}
 
+	/* Request to perform a "hot" restart */
 	if (sig == SIGHUP) {
 		appfs_hot_restart();
+	}
+
+	/* Request to terminate the current request/thread */
+	if (sig == SIGUSR1) {
+		appfs_thread_exit();
 	}
 
 	return;
