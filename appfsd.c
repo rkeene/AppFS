@@ -3,6 +3,7 @@
 #include <sys/fsuid.h>
 #include <sys/types.h>
 #include <pthread.h>
+#include <signal.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -52,6 +53,11 @@ int appfs_fuse_started = 0;
 pthread_mutex_t appfs_path_info_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 int appfs_path_info_cache_size = 8209;
 struct appfs_pathinfo *appfs_path_info_cache = NULL;
+
+/*
+ * Global variables for AppFS Tcl Interpreter restarting
+ */
+int interp_reset_key = 0;
 
 /*
  * AppFS Path Type:  Describes the type of path a given file is
@@ -250,8 +256,17 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 static Tcl_Interp *appfs_TclInterp(void) {
 	Tcl_Interp *interp;
 	int pthread_ret;
+	static __thread int thread_interp_reset_key = 0;
 
 	interp = pthread_getspecific(interpKey);
+	if (interp != NULL && thread_interp_reset_key != interp_reset_key) {
+		APPFS_DEBUG("Terminating old interpreter and restarting due to reset request.");
+
+		Tcl_DeleteInterp(interp);
+
+		interp = NULL;
+	}
+
 	if (interp == NULL) {
 		interp = appfs_create_TclInterp(NULL);
 
@@ -310,6 +325,17 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	}
 
 	return(retval);
+}
+
+/*
+ * Request all Tcl interpreters restart
+ */
+static void appfs_tcl_ResetInterps(void) {
+	APPFS_DEBUG("Requesting reset of all interpreters.");
+
+	__sync_add_and_fetch(&interp_reset_key, 1);
+
+	return;
 }
 
 /*
@@ -557,6 +583,8 @@ static void appfs_get_path_info_cache_rm(const char *path, uid_t uid) {
 static void appfs_get_path_info_cache_flush(uid_t uid, int new_size) {
 	unsigned int idx;
 	int pthread_ret;
+
+	APPFS_DEBUG("Flushing AppFS cache (uid = %lli, new_size = %i)", (long long) uid, new_size);
 
 	pthread_ret = pthread_mutex_lock(&appfs_path_info_cache_mutex);
 	if (pthread_ret != 0) {
@@ -1433,6 +1461,33 @@ static int Appfsd_Init(Tcl_Interp *interp) {
 }
 
 /*
+ * Hot-restart support
+ */
+/* Initiate a hot-restart */
+static void appfs_hot_restart(void) {
+	appfs_tcl_ResetInterps();
+	appfs_get_path_info_cache_flush(-1, -1);
+
+	return;
+}
+
+/*
+ * Signal handler to initiate a hot-restart
+ */
+static void appfs_signal_handler(int sig) {
+	/* Do not handle signals until FUSE has been started */
+	if (!appfs_fuse_started) {
+		return;
+	}
+
+	if (sig == SIGHUP) {
+		appfs_hot_restart();
+	}
+
+	return;
+}
+
+/*
  * FUSE operations structure
  */
 static struct fuse_operations appfs_operations = {
@@ -1477,6 +1532,7 @@ int main(int argc, char **argv) {
 	char *test_interp_error;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	int pthread_ret;
+	void *signal_ret;
 
 	/*
 	 * Skip passed program name
@@ -1563,6 +1619,15 @@ int main(int argc, char **argv) {
 		return(1);
 	}
 	Tcl_DeleteInterp(test_interp);
+
+	/*
+	 * Register a signal handler for hot-restart requests
+	 */
+	signal_ret = signal(SIGHUP, appfs_signal_handler);
+	if (signal_ret == SIG_ERR) {
+		fprintf(stderr, "Unable to install signal handler for hot-restart\n");
+		fprintf(stderr, "Hot-restart will not be available.\n");
+	}
 
 	/*
 	 * Add FUSE arguments which we always supply
