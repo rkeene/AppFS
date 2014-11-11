@@ -257,14 +257,19 @@ static Tcl_Interp *appfs_TclInterp(void) {
 	Tcl_Interp *interp;
 	int pthread_ret;
 	static __thread int thread_interp_reset_key = 0;
+	int global_interp_reset_key;
+
+	global_interp_reset_key = __sync_fetch_and_add(&interp_reset_key, 0);
 
 	interp = pthread_getspecific(interpKey);
-	if (interp != NULL && thread_interp_reset_key != interp_reset_key) {
+	if (interp != NULL && thread_interp_reset_key != global_interp_reset_key) {
 		APPFS_DEBUG("Terminating old interpreter and restarting due to reset request.");
 
 		Tcl_DeleteInterp(interp);
 
 		interp = NULL;
+
+		thread_interp_reset_key = global_interp_reset_key;
 	}
 
 	if (interp == NULL) {
