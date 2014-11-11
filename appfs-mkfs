@@ -111,6 +111,7 @@ for package in *; do
 					(
 						cd "${version}" || exit 1
 
+						echo "#manifestmetadata,${package},${os},${cpuArch},${version}"
 						emit_manifest
 					) > "${manifestfile}"
 

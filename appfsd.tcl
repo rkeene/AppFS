@@ -174,7 +174,7 @@ namespace eval ::appfs {
 
 		# Create indexes
 		db eval {CREATE INDEX IF NOT EXISTS sites_index ON sites (hostname);}
-		db eval {CREATE INDEX IF NOT EXISTS packages_index ON packages (hostname, package, version, os, cpuArch);}
+		db eval {CREATE INDEX IF NOT EXISTS packages_index ON packages (hostname, sha1, package, version, os, cpuArch);}
 		db eval {CREATE INDEX IF NOT EXISTS files_index ON files (package_sha1, file_name, file_directory);}
 	}
 
@@ -307,8 +307,7 @@ namespace eval ::appfs {
 	}
 
 	proc getpkgmanifest {hostname package_sha1} {
-		set haveManifests [db eval {SELECT haveManifest FROM packages WHERE sha1 = $package_sha1 LIMIT 1;}]
-		set haveManifest [lindex $haveManifests 0]
+		set haveManifest [db onecolumn {SELECT haveManifest FROM packages WHERE sha1 = $package_sha1 LIMIT 1;}]
 
 		if {$haveManifest} {
 			return COMPLETE
@@ -339,6 +338,10 @@ namespace eval ::appfs {
 
 				set work [lrange $work 2 end]
 				switch -- $fileInfo(type) {
+					"#manifestmetadata" {
+						unset -nocomplain fileInfo
+						continue
+					}
 					"file" {
 						set fileInfo(size) [lindex $work 0]
 						set fileInfo(perms) [lindex $work 1]
