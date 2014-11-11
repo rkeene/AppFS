@@ -1,6 +1,8 @@
 #! /usr/bin/env bash
 
 if [ "$1" == '--cpio' ]; then
+	shift
+
 	mode='file'
 
 	pkgfile="$1"
@@ -95,17 +97,42 @@ function emit_manifest() {
 	done
 }
 
+packagelistfile="${appfsdir}/sha1/${RANDOM}${RANDOM}${RANDOM}${RANDOM}${RANDOM}.tmp"
+default_isLatest='0'
+
 case "${mode}" in
 	dir)
 		cd "${pkgsdir}" || exit 1
 		;;
 	file)
-		echo 'Unsupported' >&2
-		exit 1
+		oldpackagelistfile="${appfsdir}/sha1/$(cat "${appfsdir}/index" | head -n 1 | cut -f 1 -d ',')"
+
+		workdir="${appfsdir}/.workdir-${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
+		mkdir "${workdir}"
+
+		cat "${pkgfile}" | ( cd "${workdir}" && cpio -imd ) || exit 1
+		cd "${workdir}" || exit 1
+
+		dirdate="$(find . -type f -printf '%TY%Tm%Td%TH%TM.%TS\n' -quit | cut -f 1-2 -d '.')"
+		find . -type d -print0 | xargs -0 -- touch -t "${dirdate}"
+
+		# If this archive contains exactly one package mark it as the latest version
+		chk_package="$(echo *)"
+		if [ -d "${chk_package}" ]; then
+			default_isLatest='1'
+		fi
+
+		cat "${oldpackagelistfile}" 2>/dev/null | (
+			if [ -d "${chk_package}" ]; then
+				sed 's@^\('"{chk_package}"',.*\),1@\1,0@'
+			else
+				cat
+			fi
+		) > "${packagelistfile}"
+
 		;;
 esac
 
-packagelistfile="${appfsdir}/sha1/${RANDOM}${RANDOM}${RANDOM}${RANDOM}${RANDOM}.tmp"
 for package in *; do
 	(
 		cd "${package}" || exit 1
@@ -135,7 +162,7 @@ for package in *; do
 					mv "${manifestfile}" "${appfsdir}/sha1/${manifestfile_hash}"
 
 					# XXX:TODO: Determine if this is the latest version
-					isLatest='0'
+					isLatest="${default_isLatest:-0}"
 
 					echo "${package},${version},${os},${cpuArch},${manifestfile_hash},${isLatest}"
 				done
@@ -143,9 +170,51 @@ for package in *; do
 			)
 		done
 	)
+done >> "${packagelistfile}"
 
-done > "${packagelistfile}"
+# Ensure package list file does not contain duplicate versions
+cat "${packagelistfile}" | awk -F ',' '
+	{
+		package = $1;
+		version = $2;
+		os = $3;
+		cpuArch = $4;
+		hash = $5;
+		isLatest = $6;
+
+		key = package "," version "," os "," cpuArch;
+
+		if (isLatest == "1") {
+			keys_latest[key] = hash;
+		}
+		keys[key] = hash;
+	}
+
+	END{
+		for (key in keys) {
+			if (keys_latest[key] != "") {
+				isLatest = "1";
+				hash = keys_latest[key];
+			} else {
+				isLatest = "0";
+				hash = keys[key];
+			}
+
+			print key "," hash "," isLatest;
+		}
+	}  
+' | sort -u > "${packagelistfile}.new"
+cat "${packagelistfile}.new" > "${packagelistfile}"
+rm -f "${packagelistfile}.new"
+
 packagelistfile_hash="$(sha1 "${packagelistfile}")"
 mv "${packagelistfile}" "${appfsdir}/sha1/${packagelistfile_hash}"
 
 echo "${packagelistfile_hash},sha1" > "${appfsdir}/index"
+
+case "${mode}" in
+	file)
+		cd /
+		rm -rf "${workdir}"
+		;;
+esac
