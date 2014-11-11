@@ -84,6 +84,14 @@ function verifyRequiredPackages() {
 	for pkg in "${require[@]}"; do
 		pkgdomain=''
 		pkgversion=''
+		pkgchanges=(CFLAGS LDFLAGS PATH PKG_CONFIG_PATH)
+
+		case "${pkg}" in
+			*:*)
+				pkgchanges=($(echo "${pkg}" | cut -f 2 -d ':'))
+				pkg="$(echo "${pkg}" | cut -f 1 -d ':')"
+				;;
+		esac
 
 		case "${pkg}" in
 			*/*@*)
@@ -113,17 +121,29 @@ function verifyRequiredPackages() {
 				pkgfound='1'
 			fi
 
-			CFLAGS="${CFLAGS} -I${pkgdir}/include"
-			CPPFLAGS="${CPPFLAGS} -I${pkgdir}/include"
-			LDFLAGS="${LDFLAGS} -L${pkgdir}/lib -Wl,-rpath,${pkgdir}/lib"
-			PATH="${PATH}:${pkgdir}/bin"
-			export CFLAGS CPPFLAGS LDFLAGS PATH
-
-			if [ -d "${pkgconfigdir}" ]; then
-				PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:${pkgconfigdir}"
-				export PKG_CONFIG_PATH
-			fi
-
+			for pkgchange in "${pkgchanges[@]}"; do
+				case "${pkgchange}" in
+					CFLAGS)
+						CFLAGS="${CFLAGS} -I${pkgdir}/include"
+						CPPFLAGS="${CPPFLAGS} -I${pkgdir}/include"
+						export CFLAGS CPPFLAGS
+						;;
+					LDFLAGS)
+						LDFLAGS="${LDFLAGS} -L${pkgdir}/lib -Wl,-rpath,${pkgdir}/lib"
+						export LDFLAGS
+						;;
+					PATH)
+						PATH="${PATH}:${pkgdir}/bin"
+						export PATH
+						;;
+					PKG_CONFIG_PATH)
+						if [ -d "${pkgconfigdir}" ]; then
+							PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:${pkgconfigdir}"
+							export PKG_CONFIG_PATH
+						fi
+						;;
+				esac
+			done
 		done
 
 		if [ "${pkgfound}" = '0' ]; then
@@ -166,21 +186,19 @@ function postconfigure() {
 }
 
 function configure() {
-	glibcvers=2.20
-	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/platform/${glibcvers}"
+	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/platform/latest"
 	dynlinker="$(ls "${glibcdir}"/lib/ld-linux*.so.* | tail -n 1)"
 
-	if [ ! -d "${glibcdir}" ]; then
+	if [ ! -f "${dynlinker}" ]; then
 		die 'glibc directory is not available (appfs running/working?)'
 	fi
 
-	CFLAGS="${CFLAGS} -I${glibcdir}/include"
-	CPPFLAGS="${CPPFLAGS} -I${glibcdir}/include"
+	CC="${CC:-gcc} -nostdinc -I${glibcdir}/include"
 	LDFLAGS="${LDFLAGS} -Wl,--rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
 	PKG_CONFIG_LIBDIR="${glibcdir}/lib/pkgconfig"
-	export CFLAGS CPPFLAGS LDFLAGS PKG_CONFIG_LIBDIR
+	export LDFLAGS PKG_CONFIG_LIBDIR
 
-	./configure --prefix="${prefix}" --sysconfdir=/etc --localstatedir=/var "${configure_extra[@]}"
+	./configure --prefix="${prefix}" --sysconfdir="${prefix}/etc" --libdir="${prefix}/lib" --localstatedir=/var "${configure_extra[@]}"
 }
 
 function prebuild() {
