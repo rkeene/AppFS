@@ -40,8 +40,9 @@ pki.tcl:
 	curl http://core.tcl.tk/tcllib/raw/modules/math/bignum.tcl?name=3bc84d9b1f18c2e7360573381317c4dc9af731f9 >> pki.tcl.new
 	curl http://core.tcl.tk/tcllib/raw/modules/md5/md5x.tcl?name=3cddfa803d680a79ab7dfac90edfd751f3d4fadd >> pki.tcl.new
 	curl http://core.tcl.tk/tcllib/raw/modules/sha1/sha256.tcl?name=1fd001eb65e88c823b980456726079deae3512df >> pki.tcl.new
-	curl 'http://core.tcl.tk/tcllib/raw/modules/pki/pki.tcl?name=8318fd31981dcc00bfadd6c427518f9d71a12b34' >> pki.tcl.new
-	openssl sha1 pki.tcl.new | grep '918ddd77f485a58192b2e86230777092d790191a' >/dev/null
+	curl http://core.tcl.tk/tcllib/raw/modules/base64/base64.tcl?name=812f146bfc1a12bb863a7a845548b9eef9cd6573 >> pki.tcl.new
+	curl http://core.tcl.tk/tcllib/raw/modules/pki/pki.tcl?name=8318fd31981dcc00bfadd6c427518f9d71a12b34 >> pki.tcl.new
+	openssl sha1 pki.tcl.new | grep 'aad7cca08cca00c8f7cd6eccc46e61da235753fc' >/dev/null
 	mv pki.tcl.new pki.tcl
 
 %.tcl.h: %.tcl
