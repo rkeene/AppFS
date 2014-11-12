@@ -11,13 +11,9 @@ function configure() {
 }
 
 function build() {
-	local dynamiclinker
-
-	dynamiclinker="$(echo " ${LDFLAGS} " | sed 's@^.* -Wl,--dynamic-linker,@@;s@ .*$@@')"
-
-	make prefix="${prefix}" lib="${dynamiclinker}"
+	make prefix="${prefix}" lib='lib'
 }
 
 function install() {
-	make prefix="${prefix}" lib="${dynamiclinker}" DESTDIR="${destdir}" RAISE_SETFCAP='no' install 
+	make prefix="${prefix}" lib='lib' DESTDIR="${destdir}" RAISE_SETFCAP='no' install 
 }
