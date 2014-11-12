@@ -1,0 +1,14 @@
+#! /usr/bin/env bash
+
+version='2.4.47'
+url="http://download.savannah.gnu.org/releases/attr/attr-${version}.src.tar.gz"
+domain=core.appfs.rkeene.org
+sha256='25772f653ac5b2e3ceeb89df50e4688891e21f723c460636548971652af0a859'
+
+function prebuild() {
+	echo "# Ignore: DESTDIR" >> Makefile
+}
+
+function install() {
+	make install install-dev install-lib DESTDIR="${destdir}"
+}
