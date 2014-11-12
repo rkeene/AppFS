@@ -1,0 +1,23 @@
+#! /usr/bin/env bash
+
+version='2.24'
+url="http://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-${version}.tar.xz"
+domain=core.appfs.rkeene.org
+sha256='cee4568f78dc851d726fc93f25f4ed91cc223b1fe8259daa4a77158d174e6c65'
+require=(attr)
+
+function configure() {
+	:
+}
+
+function build() {
+	local dynamiclinker
+
+	dynamiclinker="$(echo " ${LDFLAGS} " | sed 's@^.* -Wl,--dynamic-linker,@@;s@ .*$@@')"
+
+	make prefix="${prefix}" lib="${dynamiclinker}"
+}
+
+function install() {
+	make prefix="${prefix}" lib="${dynamiclinker}" DESTDIR="${destdir}" RAISE_SETFCAP='no' install 
+}
