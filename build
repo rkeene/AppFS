@@ -77,6 +77,32 @@ function extract() {
 	esac
 }
 
+function apply_patches() {
+	local patch
+
+	for patch in "${pkgdir}/patches"/*; do
+		if [ ! -e "${patch}" ]; then
+			continue
+		fi
+
+		case "${patch}" in
+			*.diff|*.patch)
+				;;
+			*)
+				continue
+				;;
+		esac
+
+		if [ -e "${patch}.sh" ]; then
+			if ! sh "${patch}.sh"; then
+				continue
+			fi
+		fi
+
+		patch -p1 < "${patch}"
+	done
+}
+
 function verifyRequiredPackages() {
 	local pkg pkgdomain pkgversion
 	local pkgdir pkgconfigdir pkgfound
@@ -288,10 +314,10 @@ if [ -f 'build.conf' ]; then
 fi
 
 if [ -d "pkgs/${pkg}" ]; then
-	pkgdir="pkgs/${pkg}"
+	pkgdir="$(pwd)/pkgs/${pkg}"
 	pkgfile="${pkgdir}/info"
 else
-	pkgfile="pkgs/${pkg}"
+	pkgfile="$(pwd)/pkgs/${pkg}"
 	pkgdir="${pkgfile}"
 fi
 
@@ -337,6 +363,9 @@ set -x
 
 # Determine properties
 determinePrefix
+
+# Apply patches
+apply_patches
 
 # Start the build
 preconfigure || die 'preconfigure failed'
