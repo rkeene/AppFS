@@ -246,8 +246,14 @@ function configure_gcc() {
 
 	BUILD_CC="${CC}"
 	HOST_CC="${CC}"
+
 	LDFLAGS="${LDFLAGS} -L${glibcdir}/lib -Wl,--rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
+	if [ -z "${appfs_build_no_default_symver}" ]; then
+		LDFLAGS="${LDFLAGS} -Wl,--default-symver"
+	fi
+
 	PKG_CONFIG_LIBDIR="${glibcdir}/lib/pkgconfig"
+
 	export CC BUILD_CC HOST_CC LDFLAGS PKG_CONFIG_LIBDIR
 }
 
