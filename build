@@ -158,8 +158,8 @@ function verifyRequiredPackages() {
 			for pkgchange in "${pkgchanges[@]}"; do
 				case "${pkgchange}" in
 					CFLAGS)
-						CFLAGS="${CFLAGS} -I${pkgdir}/include"
-						CPPFLAGS="${CPPFLAGS} -I${pkgdir}/include"
+						CFLAGS="${CFLAGS} -isystem ${pkgdir}/include"
+						CPPFLAGS="${CPPFLAGS} -isystem ${pkgdir}/include"
 						export CFLAGS CPPFLAGS
 						;;
 					LDFLAGS)
@@ -236,12 +236,12 @@ function configure_gcc() {
 		die 'glibc directory is not available (appfs running/working?)'
 	fi
 
-	gcc_default_headers="$(echo '' | ${CPP:-cpp} -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-I@' | tr $'\n' ' ')"
+	gcc_default_headers="$(echo '' | ${CPP:-cpp} -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-isystem @' | tr $'\n' ' ')"
 
-	CC="${CC:-gcc} -nostdinc ${gcc_default_headers} -I${glibcdir}/include"
+	CC="${CC:-gcc} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
 
 	if ! echo " ${require[*]} " | grep ' linux-headers[/@: ]' >/dev/null; then
-		CC="${CC} -I${linuxheadersdir}/include"
+		CC="${CC} -isystem ${linuxheadersdir}/include"
 	fi
 
 	BUILD_CC="${CC}"
