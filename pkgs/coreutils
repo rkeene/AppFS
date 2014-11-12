@@ -1,0 +1,13 @@
+#! /usr/bin/env bash
+
+version='8.23'
+url="http://ftp.gnu.org/gnu/coreutils/coreutils-${version}.tar.xz"
+domain=core.appfs.rkeene.org
+sha256='ec43ca5bcfc62242accb46b7f121f6b684ee21ecd7d075059bf650ff9e37b82d'
+require=(attr acl libcap)
+configure_extra=(--without-gmp)
+
+function preconfigure() {
+	DEFAULT_POSIX2_VERSION=199209
+	export DEFAULT_POSIX2_VERSION
+}
