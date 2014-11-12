@@ -663,6 +663,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		return(-EIO);
 	}
 
+	Tcl_Preserve(interp);
+
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getattr", path);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
@@ -671,6 +673,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		pathinfo->type = APPFS_PATHTYPE_DOES_NOT_EXIST;
 
 		appfs_get_path_info_cache_add(path, appfs_get_fsuid(), pathinfo);
+
+		Tcl_Release(interp);
 
 		return(-ENOENT);
 	}
@@ -691,10 +695,14 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		APPFS_DEBUG("[dict get \"type\"] failed");
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
+		Tcl_Release(interp);
+
 		return(-EIO);
 	}
 
 	if (attr_value == NULL) {
+		Tcl_Release(interp);
+
 		return(-EIO);
 	}
 
@@ -761,6 +769,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 			pathinfo->type = APPFS_PATHTYPE_SOCKET;
 			break;
 		default:
+			Tcl_Release(interp);
+
 			return(-EIO);
 	}
 
@@ -779,6 +789,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		pathinfo->time = 0;
 	}
 
+	Tcl_Release(interp);
+
 	appfs_get_path_info_cache_add(path, appfs_get_fsuid(), pathinfo);
 
 	return(0);
@@ -796,15 +808,22 @@ static char *appfs_prepare_to_create(const char *path) {
 		return(NULL);
 	}
 
+	Tcl_Preserve(interp);
+
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::prepare_to_create", path);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::prepare_to_create(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
+		Tcl_Release(interp);
+
 		return(NULL);
 	}
 
 	real_path = Tcl_GetStringResult(interp);
+
+	Tcl_Release(interp);
+
 	if (real_path == NULL) {
 		return(NULL);
 	}
@@ -822,6 +841,8 @@ static char *appfs_localpath(const char *path) {
 		return(NULL);
 	}
 
+	Tcl_Preserve(interp);
+
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::localpath", path);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::localpath(%s) failed.", path);
@@ -831,6 +852,9 @@ static char *appfs_localpath(const char *path) {
 	}
 
 	real_path = Tcl_GetStringResult(interp);
+
+	Tcl_Release(interp);
+
 	if (real_path == NULL) {
 		return(NULL);
 	}
@@ -949,6 +973,8 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 		return(0);
 	}
 
+	Tcl_Preserve(interp);
+
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
 
@@ -956,6 +982,8 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getchildren(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+
+		Tcl_Release(interp);
 
 		return(0);
 	}
@@ -965,12 +993,16 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 		APPFS_DEBUG("Parsing list of children on path %s failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
+		Tcl_Release(interp);
+
 		return(0);
 	}
 
 	for (idx = 0; idx < children_count; idx++) {
 		filler(buf, Tcl_GetString(children[idx]), NULL, 0);
 	}
+
+	Tcl_Release(interp);
 
 	return(0);
 }
@@ -1021,15 +1053,22 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 		return(-EIO);
 	}
 
+	Tcl_Preserve(interp);
+
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, mode);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, mode);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
+		Tcl_Release(interp);
+
 		return(-EIO);
 	}
 
 	real_path = Tcl_GetStringResult(interp);
+
+	Tcl_Release(interp);
+
 	if (real_path == NULL) {
 		return(-EIO);
 	}
@@ -1210,8 +1249,12 @@ static int appfs_fuse_unlink_rmdir(const char *path) {
 		APPFS_DEBUG("::appfs::unlinkpath(%s) failed.", path);
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
+		Tcl_Release(interp);
+
 		return(-EIO);
 	}
+
+	Tcl_Release(interp);
 
 	return(0);
 }
@@ -1258,15 +1301,22 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 		return(-EIO);
 	}
 
+	Tcl_Preserve(interp);
+
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, "write");
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, "write");
 		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
 
+		Tcl_Release(interp);
+
 		return(-EIO);
 	}
 
 	real_path = Tcl_GetStringResult(interp);
+
+	Tcl_Release(interp);
+
 	if (real_path == NULL) {
 		return(-EIO);
 	}
