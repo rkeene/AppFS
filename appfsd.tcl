@@ -511,6 +511,7 @@ namespace eval ::appfs {
 			}
 			"files" {
 				catch {
+					::appfs::getindex $pathinfo(hostname)
 					::appfs::getpkgmanifest $pathinfo(hostname) $pathinfo(package_sha1)
 				}
 
