@@ -1628,6 +1628,7 @@ int main(int argc, char **argv) {
 		return(1);
 	}
 	Tcl_DeleteInterp(test_interp);
+	Tcl_FinalizeNotifier(NULL);
 
 	/*
 	 * Register a signal handler for hot-restart requests
@@ -1642,7 +1643,7 @@ int main(int argc, char **argv) {
 	 * Add FUSE arguments which we always supply
 	 */
 	fuse_opt_parse(&args, NULL, NULL, appfs_fuse_opt_cb);
-	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,big_writes,hard_remove");
+	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,big_writes,intr,hard_remove");
 
 	if (getuid() == 0) {
 		fuse_opt_parse(&args, NULL, NULL, NULL);
