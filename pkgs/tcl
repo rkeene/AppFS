@@ -1,0 +1,15 @@
+#! /usr/bin/env bash
+
+version='8.6.3'
+url="http://sourceforge.net/projects/tcl/files/Tcl/${version}/tcl${version}-src.tar.gz"
+domain=core.appfs.rkeene.org
+sha256='6ce0778de0d50daaa9c345d7c1fd1288fb658f674028812e7eeee992e3051005'
+require=(zlib)
+
+function preconfigure() {
+	cd unix
+}
+
+function postinstall() {
+	cd ..
+}
