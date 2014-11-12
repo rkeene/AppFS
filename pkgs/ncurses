@@ -1,0 +1,20 @@
+#! /usr/bin/env bash
+
+version='5.9'
+url="http://ftp.gnu.org/gnu/ncurses/ncurses-${version}.tar.gz"
+domain=core.appfs.rkeene.org
+sha256='9046298fb440324c9d4135ecea7879ffed8546dd1b58e59430ea07a4633f563b'
+configure_extra=(--with-termlib --with-shared)
+
+function postinstall() {
+	# Create libtermcap compatability
+	## Create libtermcap.so shared object
+	cat << \_EOF_ > "${destdir}/${prefix}/lib/libtermcap.so"
+GROUP( libtinfo.so )
+_EOF_
+
+	## Create termcap.h header
+	cat << \_EOF_ > "${destdir}/${prefix}/include/termcap.h"
+#include <ncurses/termcap.h>
+_EOF_
+}
