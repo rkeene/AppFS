@@ -1470,6 +1470,8 @@ static int Appfsd_Init(Tcl_Interp *interp) {
  */
 /* Initiate a hot-restart */
 static void appfs_hot_restart(void) {
+	APPFS_DEBUG("Asked to initiate hot restart");
+
 	appfs_tcl_ResetInterps();
 	appfs_get_path_info_cache_flush(-1, -1);
 
@@ -1477,25 +1479,8 @@ static void appfs_hot_restart(void) {
 }
 
 /*
- * Terminate a thread and release resources
- */
-static void appfs_thread_exit(void) {
-	Tcl_Interp *interp;
-
-	pthread_exit(NULL);
-
-	interp = pthread_getspecific(interpKey);
-	if (interp != NULL) {
-		Tcl_DeleteInterp(interp);
-	}
-
-	return;
-}
-
-/*
  * Signal handler
  *         SIGHUP initiates a hot restart
- *         SIGUSR1 terminates the current thread
  */
 static void appfs_signal_handler(int sig) {
 	/* Do not handle signals until FUSE has been started */
@@ -1506,11 +1491,6 @@ static void appfs_signal_handler(int sig) {
 	/* Request to perform a "hot" restart */
 	if (sig == SIGHUP) {
 		appfs_hot_restart();
-	}
-
-	/* Request to terminate the current request/thread */
-	if (sig == SIGUSR1) {
-		appfs_thread_exit();
 	}
 
 	return;
@@ -1662,7 +1642,7 @@ int main(int argc, char **argv) {
 	 * Add FUSE arguments which we always supply
 	 */
 	fuse_opt_parse(&args, NULL, NULL, appfs_fuse_opt_cb);
-	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,intr,big_writes,hard_remove");
+	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,big_writes,hard_remove");
 
 	if (getuid() == 0) {
 		fuse_opt_parse(&args, NULL, NULL, NULL);
