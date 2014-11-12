@@ -185,8 +185,10 @@ function postconfigure() {
 	:
 }
 
-function configure() {
+function configure_gcc() {
 	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/platform/latest"
+	glibcdir="$(readlink -f "${glibcdir}")"
+
 	dynlinker="$(ls "${glibcdir}"/lib/ld-linux*.so.* | tail -n 1)"
 
 	if [ ! -f "${dynlinker}" ]; then
@@ -194,10 +196,15 @@ function configure() {
 	fi
 
 	CC="${CC:-gcc} -nostdinc -I${glibcdir}/include"
+	BUILD_CC="${CC}"
+	HOST_CC="${CC}"
 	LDFLAGS="${LDFLAGS} -Wl,--rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
 	PKG_CONFIG_LIBDIR="${glibcdir}/lib/pkgconfig"
-	export LDFLAGS PKG_CONFIG_LIBDIR
+	export CC BUILD_CC HOST_CC LDFLAGS PKG_CONFIG_LIBDIR
+}
 
+function configure() {
+	configure_gcc
 	./configure --prefix="${prefix}" --sysconfdir="${prefix}/etc" --libdir="${prefix}/lib" --localstatedir=/var "${configure_extra[@]}"
 }
 
@@ -241,8 +248,6 @@ function die() {
 	if [ -n "${message}" ]; then
 		echo "error: ${message}" >&2
 	fi
-
-	cleanup
 
 	exit 1
 }
