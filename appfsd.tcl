@@ -453,7 +453,7 @@ namespace eval ::appfs {
 							set retval(_children) files
 							set retval(_type) versions
 
-							set retval(package_sha1) [::appfs::db onecolumn {SELECT sha1 FROM packages WHERE hostname = $retval(hostname) AND os = $retval(os) AND cpuArch = $retval(cpu) AND version = $retval(version);}]
+							set retval(package_sha1) [::appfs::db onecolumn {SELECT sha1 FROM packages WHERE hostname = $retval(hostname) AND package = $retval(package) AND os = $retval(os) AND cpuArch = $retval(cpu) AND version = $retval(version);}]
 							if {$retval(package_sha1) == ""} {
 								set retval(_children) dead
 								return [array get retval]
