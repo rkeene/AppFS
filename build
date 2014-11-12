@@ -114,12 +114,20 @@ function verifyRequiredPackages() {
 		fi
 
 		pkgfound='0'
-		for pkgdir in "/opt/appfs/${pkgdomain}/${pkg}/platform"/${pkgversion:-*}; do
+		for pkgdir in "/opt/appfs/${pkgdomain}/${pkg}/platform"/${pkgversion:-latest} "/opt/appfs/${pkgdomain}/${pkg}/platform"/${pkgversion:-*}; do
 			pkgconfigdir="${pkgdir}/lib/pkgconfig"
 
-			if [ -d "${pkgdir}" ]; then
-				pkgfound='1'
+			if [ ! -d "${pkgdir}" ]; then
+				continue
 			fi
+
+			# If the package version was unspecified, fully resolve
+			# the directory that we found
+			if [ -z "${pkgversion}" ]; then
+				pkgdir="$(readlink -f "${pkgdir}")"
+			fi
+
+			pkgfound='1'
 
 			for pkgchange in "${pkgchanges[@]}"; do
 				case "${pkgchange}" in
