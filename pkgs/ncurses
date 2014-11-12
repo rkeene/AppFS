@@ -4,7 +4,7 @@ version='5.9'
 url="http://ftp.gnu.org/gnu/ncurses/ncurses-${version}.tar.gz"
 domain=core.appfs.rkeene.org
 sha256='9046298fb440324c9d4135ecea7879ffed8546dd1b58e59430ea07a4633f563b'
-configure_extra=(--with-termlib --with-shared)
+configure_extra=(--with-termlib --with-ticlib --with-shared)
 
 function postinstall() {
 	# Create libtermcap compatability

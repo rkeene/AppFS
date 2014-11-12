@@ -1,0 +1,7 @@
+#! /usr/bin/env bash
+
+version='4.3.30'
+url="http://ftp.gnu.org/gnu/bash/bash-${version}.tar.gz"
+domain=core.appfs.rkeene.org
+sha256='317881019bbf2262fb814b7dd8e40632d13c3608d2f237800a8828fbb8a640dd'
+require=(zlib readline ncurses)
