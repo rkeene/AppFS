@@ -1,0 +1,7 @@
+#! /usr/bin/env bash
+
+version='1.0.2'
+url="http://ftp.gnu.org/gnu/mpc/mpc-${version}.tar.gz"
+domain=core.appfs.rkeene.org
+sha256='b561f54d8a479cee3bc891ee52735f18ff86712ba30f036f8b8537bae380c488'
+require=(gmp mpfr)
