@@ -922,7 +922,7 @@ static char *appfs_localpath(const char *path) {
 	return(strdup(real_path));
 }
 
-#ifdef APPFS_EXIT_PATH
+#if (defined(DEBUG) && defined(APPFS_EXIT_PATH)) || defined(APPFS_EXIT_PATH_ENABLE_MAJOR_SECURITY_HOLE)
 static void appfs_exit(void) {
 	int global_interp_reset_key;
 
