@@ -507,6 +507,7 @@ static unsigned long long appfs_get_path_inode(const char *path) {
 	retval = 10;
 
 	for (p = path; *p; p++) {
+		retval %= 4290960290ULL;
 		retval += *p;
 		retval <<= 6;
 	}
