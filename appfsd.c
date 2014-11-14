@@ -55,6 +55,19 @@ pthread_mutex_t appfs_path_info_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 int appfs_path_info_cache_size = 8209;
 struct appfs_pathinfo *appfs_path_info_cache = NULL;
 
+#ifndef TCL_THREADS
+/*
+ * Handle unthreaded Tcl
+ */
+pthread_mutex_t appfs_tcl_big_global_lock = PTHREAD_MUTEX_INITIALIZER;
+#define appfs_call_libtcl_enter pthread_mutex_lock(&appfs_tcl_big_global_lock);
+#define appfs_call_libtcl_exit pthread_mutex_unlock(&appfs_tcl_big_global_lock);
+#else
+#define appfs_call_libtcl_enter /**/
+#define appfs_call_libtcl_exit /**/
+#endif
+#define appfs_call_libtcl(x...) appfs_call_libtcl_enter x appfs_call_libtcl_exit
+
 /*
  * Global variables for AppFS Tcl Interpreter restarting
  */
@@ -109,10 +122,13 @@ struct appfs_pathinfo {
 static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	Tcl_Interp *interp;
 	int tcl_ret;
+	const char *tcl_setvar_ret;
 
 	APPFS_DEBUG("Creating new Tcl interpreter for TID = 0x%llx", (unsigned long long) pthread_self());
 
-	interp = Tcl_CreateInterp();
+	appfs_call_libtcl(
+		interp = Tcl_CreateInterp();
+	)
 	if (interp == NULL) {
 		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
 
@@ -123,58 +139,76 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		return(NULL);
 	}
 
-	Tcl_Preserve(interp);
+	appfs_call_libtcl(Tcl_Preserve(interp);)
 
-	tcl_ret = Tcl_Init(interp);
+	appfs_call_libtcl(
+		tcl_ret = Tcl_Init(interp);
+	)
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		)
 
 		if (error_string) {
-			*error_string = strdup(Tcl_GetStringResult(interp));
+			appfs_call_libtcl(
+				*error_string = strdup(Tcl_GetStringResult(interp));
+			)
 		}
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		APPFS_DEBUG("Terminating Tcl interpreter.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		return(NULL);
 	}
 
-	tcl_ret = Tcl_Eval(interp, "package ifneeded sha1 1.0 [list load {} sha1]");
+	appfs_call_libtcl(
+		tcl_ret = Tcl_Eval(interp, "package ifneeded sha1 1.0 [list load {} sha1]");
+	)
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl SHA1.  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		)
 
 		if (error_string) {
-			*error_string = strdup(Tcl_GetStringResult(interp));
+			appfs_call_libtcl(
+				*error_string = strdup(Tcl_GetStringResult(interp));
+			)
 		}
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		APPFS_DEBUG("Terminating Tcl interpreter.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		return(NULL);
 	}
 
-	tcl_ret = Tcl_Eval(interp, "package ifneeded appfsd 1.0 [list load {} appfsd]");
+	appfs_call_libtcl(
+		tcl_ret = Tcl_Eval(interp, "package ifneeded appfsd 1.0 [list load {} appfsd]");
+	)
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS Package.  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		)
 
 		if (error_string) {
-			*error_string = strdup(Tcl_GetStringResult(interp));
+			appfs_call_libtcl(
+				*error_string = strdup(Tcl_GetStringResult(interp));
+			)
 		}
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		APPFS_DEBUG("Terminating Tcl interpreter.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		return(NULL);
 	}
@@ -182,22 +216,28 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	/*
 	 * Load "pki.tcl" in the same way as appfsd.tcl (see below)
 	 */
-	tcl_ret = Tcl_Eval(interp, ""
+	appfs_call_libtcl_enter
+		tcl_ret = Tcl_Eval(interp, ""
 #include "pki.tcl.h"
-	"");
+		"");
+	appfs_call_libtcl_exit
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl PKI.  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		)
 
 		if (error_string) {
-			*error_string = strdup(Tcl_GetStringResult(interp));
+			appfs_call_libtcl(
+				*error_string = strdup(Tcl_GetStringResult(interp));
+			)
 		}
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		APPFS_DEBUG("Terminating Tcl interpreter.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		return(NULL);
 	}
@@ -207,22 +247,28 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	 * so that it does not need to exist on the filesystem and can be
 	 * directly evaluated.
 	 */
-	tcl_ret = Tcl_Eval(interp, ""
+	appfs_call_libtcl_enter
+		tcl_ret = Tcl_Eval(interp, ""
 #include "appfsd.tcl.h"
-	"");
+		"");
+	appfs_call_libtcl_exit
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		)
 
 		if (error_string) {
-			*error_string = strdup(Tcl_GetStringResult(interp));
+			appfs_call_libtcl(
+				*error_string = strdup(Tcl_GetStringResult(interp));
+			)
 		}
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		APPFS_DEBUG("Terminating Tcl interpreter.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		return(NULL);
 	}
@@ -230,18 +276,23 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	/*
 	 * Set global variables from C to Tcl
 	 */
-	if (Tcl_SetVar(interp, "::appfs::cachedir", appfs_cachedir, TCL_GLOBAL_ONLY) == NULL) {
+	appfs_call_libtcl(
+		tcl_setvar_ret = Tcl_SetVar(interp, "::appfs::cachedir", appfs_cachedir, TCL_GLOBAL_ONLY);
+	)
+	if (tcl_setvar_ret == NULL) {
 		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
 
 		if (error_string) {
-			*error_string = strdup(Tcl_GetStringResult(interp));
+			appfs_call_libtcl(
+				*error_string = strdup(Tcl_GetStringResult(interp));
+			)
 		}
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		APPFS_DEBUG("Terminating Tcl interpreter.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		return(NULL);
 	}
@@ -250,20 +301,26 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	 * Initialize the "appfsd.tcl" environment, which must be done after
 	 * global variables are set.
 	 */
-	tcl_ret = Tcl_Eval(interp, "::appfs::init");
+	appfs_call_libtcl(
+		tcl_ret = Tcl_Eval(interp, "::appfs::init");
+	)
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
-		fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+		)
 
 		if (error_string) {
-			*error_string = strdup(Tcl_GetStringResult(interp));
+			appfs_call_libtcl(
+				*error_string = strdup(Tcl_GetStringResult(interp));
+			)
 		}
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		APPFS_DEBUG("Terminating Tcl interpreter.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		return(NULL);
 	}
@@ -272,15 +329,17 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	 * Hide some Tcl commands that we do not care to use and which may
 	 * slow down run-time operations.
 	 */
-	Tcl_HideCommand(interp, "auto_load_index", "auto_load_index");
-	Tcl_HideCommand(interp, "unknown", "unknown");
-	Tcl_HideCommand(interp, "exit", "exit");
+	appfs_call_libtcl(
+		Tcl_HideCommand(interp, "auto_load_index", "auto_load_index");
+		Tcl_HideCommand(interp, "unknown", "unknown");
+		Tcl_HideCommand(interp, "exit", "exit");
+	)
 
 	/*
 	 * Release the hold we have on the interpreter so that it may be
 	 * deleted if needed
 	 */
-	Tcl_Release(interp);
+	appfs_call_libtcl(Tcl_Release(interp);)
 
 	/*
 	 * Return the completely initialized interpreter
@@ -303,7 +362,7 @@ static Tcl_Interp *appfs_TclInterp(void) {
 	if (interp != NULL && thread_interp_reset_key != global_interp_reset_key) {
 		APPFS_DEBUG("Terminating old interpreter and restarting due to reset request.");
 
-		Tcl_DeleteInterp(interp);
+		appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 		interp = NULL;
 
@@ -329,7 +388,7 @@ static Tcl_Interp *appfs_TclInterp(void) {
 		if (pthread_ret != 0) {
 			APPFS_DEBUG("pthread_setspecific() failed.  Terminating Tcl interpreter.");
 
-			Tcl_DeleteInterp(interp);
+			appfs_call_libtcl(Tcl_DeleteInterp(interp);)
 
 			return(NULL);
 		}
@@ -355,30 +414,38 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 
 	objv = (void *) ckalloc(sizeof(*objv) * objc);
 
-	objv[0] = Tcl_NewStringObj(cmd, -1);
+	appfs_call_libtcl(
+		objv[0] = Tcl_NewStringObj(cmd, -1);
 
-	Tcl_IncrRefCount(objv[0]);
+		Tcl_IncrRefCount(objv[0]);
 
-	va_start(argp, cmd);
-	for (i = 1; i < objc; i++) {
-		arg = va_arg(argp, const char *);
+		va_start(argp, cmd);
+		for (i = 1; i < objc; i++) {
+			arg = va_arg(argp, const char *);
 
-		objv[i] = Tcl_NewStringObj(arg, -1);
+			objv[i] = Tcl_NewStringObj(arg, -1);
 
-		Tcl_IncrRefCount(objv[i]);
-	}
-	va_end(argp);
+			Tcl_IncrRefCount(objv[i]);
+		}
+		va_end(argp);
+	)
 
-	retval = Tcl_EvalObjv(interp, objc, objv, 0);
+	appfs_call_libtcl(
+		retval = Tcl_EvalObjv(interp, objc, objv, 0);
+	)
 
-	for (i = 0; i < objc; i++) {
-		Tcl_DecrRefCount(objv[i]);
-	}
+	appfs_call_libtcl(
+		for (i = 0; i < objc; i++) {
+			Tcl_DecrRefCount(objv[i]);
+		}
+	)
 
 	ckfree((void *) objv);
 
 	if (retval != TCL_OK) {
-		APPFS_DEBUG("Tcl command failed, ::errorInfo contains: %s\n", Tcl_GetVar(interp, "::errorInfo", 0));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl command failed, ::errorInfo contains: %s\n", Tcl_GetVar(interp, "::errorInfo", 0));
+		)
 	}
 
 	return(retval);
@@ -700,7 +767,10 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL, *attr_key_packaged = NULL;
 	int cache_ret;
 	int tcl_ret;
+	int retval;
 	uid_t fsuid;
+
+	retval = 0;
 
 	fsuid = appfs_get_fsuid();
 
@@ -722,45 +792,61 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		return(-EIO);
 	}
 
-	Tcl_Preserve(interp);
+	appfs_call_libtcl(Tcl_Preserve(interp);)
 
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getattr", path);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getattr(%s) failed.", path);
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
 		pathinfo->type = APPFS_PATHTYPE_DOES_NOT_EXIST;
 
 		appfs_get_path_info_cache_add(path, fsuid, pathinfo);
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(-ENOENT);
 	}
 
 	if (attr_key_type == NULL) {
-		attr_key_type       = Tcl_NewStringObj("type", -1);
-		attr_key_perms      = Tcl_NewStringObj("perms", -1);
-		attr_key_size       = Tcl_NewStringObj("size", -1);
-		attr_key_time       = Tcl_NewStringObj("time", -1);
-		attr_key_source     = Tcl_NewStringObj("source", -1);
-		attr_key_childcount = Tcl_NewStringObj("childcount", -1);
-		attr_key_packaged   = Tcl_NewStringObj("packaged", -1);
+		appfs_call_libtcl(
+			attr_key_type       = Tcl_NewStringObj("type", -1);
+			attr_key_perms      = Tcl_NewStringObj("perms", -1);
+			attr_key_size       = Tcl_NewStringObj("size", -1);
+			attr_key_time       = Tcl_NewStringObj("time", -1);
+			attr_key_source     = Tcl_NewStringObj("source", -1);
+			attr_key_childcount = Tcl_NewStringObj("childcount", -1);
+			attr_key_packaged   = Tcl_NewStringObj("packaged", -1);
+
+			Tcl_IncrRefCount(attr_key_type);
+			Tcl_IncrRefCount(attr_key_perms);
+			Tcl_IncrRefCount(attr_key_size);
+			Tcl_IncrRefCount(attr_key_time);
+			Tcl_IncrRefCount(attr_key_source);
+			Tcl_IncrRefCount(attr_key_childcount);
+			Tcl_IncrRefCount(attr_key_packaged);
+		)
 	}
 
-	attrs_dict = Tcl_GetObjResult(interp);
-	tcl_ret = Tcl_DictObjGet(interp, attrs_dict, attr_key_type, &attr_value);
+	appfs_call_libtcl(
+		attrs_dict = Tcl_GetObjResult(interp);
+		tcl_ret = Tcl_DictObjGet(interp, attrs_dict, attr_key_type, &attr_value);
+	)
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("[dict get \"type\"] failed");
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(-EIO);
 	}
 
 	if (attr_value == NULL) {
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(-EIO);
 	}
@@ -768,92 +854,94 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	pathinfo->packaged = 0;
 	pathinfo->inode = appfs_get_path_inode(path);
 
-	attr_value_str = Tcl_GetString(attr_value);
+	appfs_call_libtcl(
+		attr_value_str = Tcl_GetString(attr_value);
 
-	switch (attr_value_str[0]) {
-		case 'd': /* directory */
-			pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
-			pathinfo->typeinfo.dir.childcount = 0;
+		switch (attr_value_str[0]) {
+			case 'd': /* directory */
+				pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
+				pathinfo->typeinfo.dir.childcount = 0;
 
-			Tcl_DictObjGet(interp, attrs_dict, attr_key_childcount, &attr_value);
-			if (attr_value != NULL) {
-				tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
-				if (tcl_ret == TCL_OK) {
-					pathinfo->typeinfo.dir.childcount = attr_value_wide;
+				Tcl_DictObjGet(interp, attrs_dict, attr_key_childcount, &attr_value);
+				if (attr_value != NULL) {
+					tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+					if (tcl_ret == TCL_OK) {
+						pathinfo->typeinfo.dir.childcount = attr_value_wide;
+					}
 				}
-			}
 
-			break;
-		case 'f': /* file */
-			pathinfo->type = APPFS_PATHTYPE_FILE;
-			pathinfo->typeinfo.file.size = 0;
-			pathinfo->typeinfo.file.executable = 0;
+				break;
+			case 'f': /* file */
+				pathinfo->type = APPFS_PATHTYPE_FILE;
+				pathinfo->typeinfo.file.size = 0;
+				pathinfo->typeinfo.file.executable = 0;
 
-			Tcl_DictObjGet(interp, attrs_dict, attr_key_size, &attr_value);
-			if (attr_value != NULL) {
-				tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
-				if (tcl_ret == TCL_OK) {
-					pathinfo->typeinfo.file.size = attr_value_wide;
+				Tcl_DictObjGet(interp, attrs_dict, attr_key_size, &attr_value);
+				if (attr_value != NULL) {
+					tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+					if (tcl_ret == TCL_OK) {
+						pathinfo->typeinfo.file.size = attr_value_wide;
+					}
 				}
-			}
 
-			Tcl_DictObjGet(interp, attrs_dict, attr_key_perms, &attr_value);
-			if (attr_value != NULL) {
-				attr_value_str = Tcl_GetString(attr_value);
-				if (attr_value_str[0] == 'x') {
-					pathinfo->typeinfo.file.executable = 1;
+				Tcl_DictObjGet(interp, attrs_dict, attr_key_perms, &attr_value);
+				if (attr_value != NULL) {
+					attr_value_str = Tcl_GetString(attr_value);
+					if (attr_value_str[0] == 'x') {
+						pathinfo->typeinfo.file.executable = 1;
+					}
 				}
-			}
-			break;
-		case 's': /* symlink */
-			pathinfo->type = APPFS_PATHTYPE_SYMLINK;
-			pathinfo->typeinfo.symlink.size = 0;
-			pathinfo->typeinfo.symlink.source[0] = '\0';
+				break;
+			case 's': /* symlink */
+				pathinfo->type = APPFS_PATHTYPE_SYMLINK;
+				pathinfo->typeinfo.symlink.size = 0;
+				pathinfo->typeinfo.symlink.source[0] = '\0';
 
-			Tcl_DictObjGet(interp, attrs_dict, attr_key_source, &attr_value);
-			if (attr_value != NULL) {
-				attr_value_str = Tcl_GetStringFromObj(attr_value, &attr_value_int); 
+				Tcl_DictObjGet(interp, attrs_dict, attr_key_source, &attr_value);
+				if (attr_value != NULL) {
+					attr_value_str = Tcl_GetStringFromObj(attr_value, &attr_value_int); 
 
-				if ((attr_value_int + 1) <= sizeof(pathinfo->typeinfo.symlink.source)) {
-					pathinfo->typeinfo.symlink.size = attr_value_int;
-					pathinfo->typeinfo.symlink.source[attr_value_int] = '\0';
+					if ((attr_value_int + 1) <= sizeof(pathinfo->typeinfo.symlink.source)) {
+						pathinfo->typeinfo.symlink.size = attr_value_int;
+						pathinfo->typeinfo.symlink.source[attr_value_int] = '\0';
 
-					memcpy(pathinfo->typeinfo.symlink.source, attr_value_str, attr_value_int);
+						memcpy(pathinfo->typeinfo.symlink.source, attr_value_str, attr_value_int);
+					}
 				}
-			}
-			break;
-		case 'F': /* pipe/fifo */
-			pathinfo->type = APPFS_PATHTYPE_FIFO;
-			break;
-		case 'S': /* UNIX domain socket */
-			pathinfo->type = APPFS_PATHTYPE_SOCKET;
-			break;
-		default:
-			Tcl_Release(interp);
-
-			return(-EIO);
-	}
-
-	Tcl_DictObjGet(interp, attrs_dict, attr_key_packaged, &attr_value);
-	if (attr_value != NULL) {
-		pathinfo->packaged = 1;
-	}
-
-	Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
-	if (attr_value != NULL) {
-		tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
-		if (tcl_ret == TCL_OK) {
-			pathinfo->time = attr_value_wide;
+				break;
+			case 'F': /* pipe/fifo */
+				pathinfo->type = APPFS_PATHTYPE_FIFO;
+				break;
+			case 'S': /* UNIX domain socket */
+				pathinfo->type = APPFS_PATHTYPE_SOCKET;
+				break;
+			default:
+				retval = -EIO;
 		}
-	} else {
-		pathinfo->time = 0;
+
+		Tcl_DictObjGet(interp, attrs_dict, attr_key_packaged, &attr_value);
+		if (attr_value != NULL) {
+			pathinfo->packaged = 1;
+		}
+
+		Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
+		if (attr_value != NULL) {
+			tcl_ret = Tcl_GetWideIntFromObj(NULL, attr_value, &attr_value_wide);
+			if (tcl_ret == TCL_OK) {
+				pathinfo->time = attr_value_wide;
+			}
+		} else {
+			pathinfo->time = 0;
+		}
+
+		Tcl_Release(interp);
+	)
+
+	if (retval == 0) {
+		appfs_get_path_info_cache_add(path, fsuid, pathinfo);
 	}
 
-	Tcl_Release(interp);
-
-	appfs_get_path_info_cache_add(path, fsuid, pathinfo);
-
-	return(0);
+	return(retval);
 }
 
 static char *appfs_prepare_to_create(const char *path) {
@@ -868,21 +956,27 @@ static char *appfs_prepare_to_create(const char *path) {
 		return(NULL);
 	}
 
-	Tcl_Preserve(interp);
+	appfs_call_libtcl(Tcl_Preserve(interp);)
 
-	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::prepare_to_create", path);
+	appfs_call_libtcl(
+		tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::prepare_to_create", path);
+	)
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::prepare_to_create(%s) failed.", path);
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(NULL);
 	}
 
-	real_path = Tcl_GetStringResult(interp);
+	appfs_call_libtcl(
+		real_path = Tcl_GetStringResult(interp);
+	)
 
-	Tcl_Release(interp);
+	appfs_call_libtcl(Tcl_Release(interp);)
 
 	if (real_path == NULL) {
 		return(NULL);
@@ -901,19 +995,25 @@ static char *appfs_localpath(const char *path) {
 		return(NULL);
 	}
 
-	Tcl_Preserve(interp);
+	appfs_call_libtcl(Tcl_Preserve(interp);)
 
-	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::localpath", path);
+	appfs_call_libtcl(
+		tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::localpath", path);
+	)
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::localpath(%s) failed.", path);
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
 		return(NULL);
 	}
 
-	real_path = Tcl_GetStringResult(interp);
+	appfs_call_libtcl(
+		real_path = Tcl_GetStringResult(interp);
+	)
 
-	Tcl_Release(interp);
+	appfs_call_libtcl(Tcl_Release(interp);)
 
 	if (real_path == NULL) {
 		return(NULL);
@@ -1068,7 +1168,7 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 		return(0);
 	}
 
-	Tcl_Preserve(interp);
+	appfs_call_libtcl(Tcl_Preserve(interp);)
 
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
@@ -1076,28 +1176,36 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::getchildren", path);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::getchildren(%s) failed.", path);
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(0);
 	}
 
-	tcl_ret = Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &children_count, &children);
+	appfs_call_libtcl(
+		tcl_ret = Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &children_count, &children);
+	)
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("Parsing list of children on path %s failed.", path);
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(0);
 	}
 
 	for (idx = 0; idx < children_count; idx++) {
-		filler(buf, Tcl_GetString(children[idx]), NULL, 0);
+		appfs_call_libtcl(
+			filler(buf, Tcl_GetString(children[idx]), NULL, 0);
+		)
 	}
 
-	Tcl_Release(interp);
+	appfs_call_libtcl(Tcl_Release(interp);)
 
 	return(0);
 }
@@ -1148,21 +1256,25 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 		return(-EIO);
 	}
 
-	Tcl_Preserve(interp);
+	appfs_call_libtcl(Tcl_Preserve(interp);)
 
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, mode);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, mode);
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(-EIO);
 	}
 
-	real_path = Tcl_GetStringResult(interp);
+	appfs_call_libtcl(
+		real_path = Tcl_GetStringResult(interp);
+	)
 
-	Tcl_Release(interp);
+	appfs_call_libtcl(Tcl_Release(interp);)
 
 	if (real_path == NULL) {
 		return(-EIO);
@@ -1342,14 +1454,16 @@ static int appfs_fuse_unlink_rmdir(const char *path) {
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::unlinkpath", path);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::unlinkpath(%s) failed.", path);
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(-EIO);
 	}
 
-	Tcl_Release(interp);
+	appfs_call_libtcl(Tcl_Release(interp);)
 
 	return(0);
 }
@@ -1396,21 +1510,25 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 		return(-EIO);
 	}
 
-	Tcl_Preserve(interp);
+	appfs_call_libtcl(Tcl_Preserve(interp);)
 
 	tcl_ret = appfs_Tcl_Eval(interp, 3, "::appfs::openpath", path, "write");
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::openpath(%s, %s) failed.", path, "write");
-		APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		appfs_call_libtcl(
+			APPFS_DEBUG("Tcl Error is: %s", Tcl_GetStringResult(interp));
+		)
 
-		Tcl_Release(interp);
+		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(-EIO);
 	}
 
-	real_path = Tcl_GetStringResult(interp);
+	appfs_call_libtcl(
+		real_path = Tcl_GetStringResult(interp);
+	)
 
-	Tcl_Release(interp);
+	appfs_call_libtcl(Tcl_Release(interp);)
 
 	if (real_path == NULL) {
 		return(-EIO);
@@ -1512,6 +1630,8 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
 
 	if (fsuid == last_fsuid && last_homedir_obj != NULL) {
 		homedir_obj = last_homedir_obj;
+
+		Tcl_IncrRefCount(homedir_obj);
 	} else {
 		homedir = appfs_get_homedir(appfs_get_fsuid());
 
@@ -1523,6 +1643,8 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
 
 		free(homedir);
 
+		Tcl_IncrRefCount(homedir_obj);
+
 		if (last_homedir_obj != NULL) {
 			Tcl_DecrRefCount(last_homedir_obj);
 		}
@@ -1530,10 +1652,12 @@ static int tcl_appfs_get_homedir(ClientData cd, Tcl_Interp *interp, int objc, Tc
 		last_homedir_obj = homedir_obj;
 		last_fsuid = fsuid;
 
-		Tcl_IncrRefCount(last_homedir_obj);
+		Tcl_IncrRefCount(homedir_obj);
 	}
 
        	Tcl_SetObjResult(interp, homedir_obj);
+
+	Tcl_DecrRefCount(homedir_obj);
 
         return(TCL_OK);
 }
@@ -1659,7 +1783,9 @@ static void appfs_terminate_interp(void *_interp) {
 
 	APPFS_DEBUG("Terminating interpreter due to thread termination");
 
-	Tcl_DeleteInterp(interp);
+	appfs_call_libtcl(
+		Tcl_DeleteInterp(interp);
+	)
 
 	return;
 }
@@ -1795,7 +1921,9 @@ int main(int argc, char **argv) {
 
 		return(1);
 	}
+
 	Tcl_DeleteInterp(test_interp);
+
 	Tcl_FinalizeNotifier(NULL);
 
 	/*
