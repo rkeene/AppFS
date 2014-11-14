@@ -500,14 +500,13 @@ static char *appfs_get_homedir(uid_t fsuid) {
 #if UINT_MAX < 4294967295
 #error Integer size is too small 
 #endif
-static long long appfs_get_path_inode(const char *path) {
+static unsigned long long appfs_get_path_inode(const char *path) {
 	int retval;
 	const char *p;
 
 	retval = 10;
 
 	for (p = path; *p; p++) {
-		retval %= 4290960290ULL;
 		retval += *p;
 		retval <<= 6;
 	}
