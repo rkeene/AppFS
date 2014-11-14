@@ -310,6 +310,12 @@ static Tcl_Interp *appfs_TclInterp(void) {
 		pthread_ret = pthread_setspecific(interpKey, interp);
 	}
 
+	if (global_interp_reset_key == -1) {
+		APPFS_DEBUG("Not creating a new interpreter since we are terminating.");
+
+		return(NULL);
+	}
+
 	thread_interp_reset_key = global_interp_reset_key;
 
 	if (interp == NULL) {
@@ -348,13 +354,17 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	}
 
 	objv = (void *) ckalloc(sizeof(*objv) * objc);
+
 	objv[0] = Tcl_NewStringObj(cmd, -1);
+
 	Tcl_IncrRefCount(objv[0]);
 
 	va_start(argp, cmd);
 	for (i = 1; i < objc; i++) {
 		arg = va_arg(argp, const char *);
+
 		objv[i] = Tcl_NewStringObj(arg, -1);
+
 		Tcl_IncrRefCount(objv[i]);
 	}
 	va_end(argp);
@@ -760,8 +770,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 	attr_value_str = Tcl_GetString(attr_value);
 
-	Tcl_DecrRefCount(attr_value);
-
 	switch (attr_value_str[0]) {
 		case 'd': /* directory */
 			pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
@@ -773,8 +781,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				if (tcl_ret == TCL_OK) {
 					pathinfo->typeinfo.dir.childcount = attr_value_wide;
 				}
-
-				Tcl_DecrRefCount(attr_value);
 			}
 
 			break;
@@ -789,8 +795,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				if (tcl_ret == TCL_OK) {
 					pathinfo->typeinfo.file.size = attr_value_wide;
 				}
-
-				Tcl_DecrRefCount(attr_value);
 			}
 
 			Tcl_DictObjGet(interp, attrs_dict, attr_key_perms, &attr_value);
@@ -799,8 +803,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				if (attr_value_str[0] == 'x') {
 					pathinfo->typeinfo.file.executable = 1;
 				}
-
-				Tcl_DecrRefCount(attr_value);
 			}
 			break;
 		case 's': /* symlink */
@@ -818,8 +820,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 					memcpy(pathinfo->typeinfo.symlink.source, attr_value_str, attr_value_int);
 				}
-
-				Tcl_DecrRefCount(attr_value);
 			}
 			break;
 		case 'F': /* pipe/fifo */
@@ -829,8 +829,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 			pathinfo->type = APPFS_PATHTYPE_SOCKET;
 			break;
 		default:
-			Tcl_DecrRefCount(attrs_dict);
-
 			Tcl_Release(interp);
 
 			return(-EIO);
@@ -839,8 +837,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	Tcl_DictObjGet(interp, attrs_dict, attr_key_packaged, &attr_value);
 	if (attr_value != NULL) {
 		pathinfo->packaged = 1;
-
-		Tcl_DecrRefCount(attr_value);
 	}
 
 	Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
@@ -849,8 +845,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		if (tcl_ret == TCL_OK) {
 			pathinfo->time = attr_value_wide;
 		}
-
-		Tcl_DecrRefCount(attr_value);
 	} else {
 		pathinfo->time = 0;
 	}
@@ -928,6 +922,30 @@ static char *appfs_localpath(const char *path) {
 	return(strdup(real_path));
 }
 
+#ifdef APPFS_EXIT_PATH
+static void appfs_exit(void) {
+	int global_interp_reset_key;
+
+	global_interp_reset_key = __sync_fetch_and_add(&interp_reset_key, 0);
+	__sync_fetch_and_sub(&interp_reset_key, global_interp_reset_key);
+
+	while (__sync_sub_and_fetch(&interp_reset_key, 1) >= 0) {
+		/* Busy Loop */
+	}
+
+	global_interp_reset_key = __sync_fetch_and_add(&interp_reset_key, 0);
+	if (global_interp_reset_key != -1) {
+		APPFS_DEBUG("Error sending kill signal to all threads, aborting anyway.");
+	}
+
+	fuse_exit(fuse_get_context()->fuse);
+
+	appfs_get_path_info_cache_flush(-1, -1);
+
+	return;
+}
+#endif
+
 static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
 	struct appfs_pathinfo pathinfo;
 	int retval = 0;
@@ -961,6 +979,17 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	retval = 0;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+#if (defined(DEBUG) && defined(APPFS_EXIT_PATH)) || defined(APPFS_EXIT_PATH_ENABLE_MAJOR_SECURITY_HOLE)
+	/*
+	 * This is a major security issue so we cannot let it be compiled into
+	 * any release
+	 */
+
+	if (strcmp(path, "/exit") == 0) {
+		appfs_exit();
+	}
+#endif
 
 	pathinfo.type = APPFS_PATHTYPE_INVALID;
 
@@ -1067,8 +1096,6 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	for (idx = 0; idx < children_count; idx++) {
 		filler(buf, Tcl_GetString(children[idx]), NULL, 0);
 	}
-
-	Tcl_DecrRefCount(children);
 
 	Tcl_Release(interp);
 
