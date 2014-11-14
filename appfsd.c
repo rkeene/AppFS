@@ -759,6 +759,9 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	pathinfo->inode = appfs_get_path_inode(path);
 
 	attr_value_str = Tcl_GetString(attr_value);
+
+	Tcl_DecrRefCount(attr_value);
+
 	switch (attr_value_str[0]) {
 		case 'd': /* directory */
 			pathinfo->type = APPFS_PATHTYPE_DIRECTORY;
@@ -770,6 +773,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				if (tcl_ret == TCL_OK) {
 					pathinfo->typeinfo.dir.childcount = attr_value_wide;
 				}
+
+				Tcl_DecrRefCount(attr_value);
 			}
 
 			break;
@@ -784,6 +789,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				if (tcl_ret == TCL_OK) {
 					pathinfo->typeinfo.file.size = attr_value_wide;
 				}
+
+				Tcl_DecrRefCount(attr_value);
 			}
 
 			Tcl_DictObjGet(interp, attrs_dict, attr_key_perms, &attr_value);
@@ -792,6 +799,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				if (attr_value_str[0] == 'x') {
 					pathinfo->typeinfo.file.executable = 1;
 				}
+
+				Tcl_DecrRefCount(attr_value);
 			}
 			break;
 		case 's': /* symlink */
@@ -809,6 +818,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 					memcpy(pathinfo->typeinfo.symlink.source, attr_value_str, attr_value_int);
 				}
+
+				Tcl_DecrRefCount(attr_value);
 			}
 			break;
 		case 'F': /* pipe/fifo */
@@ -818,6 +829,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 			pathinfo->type = APPFS_PATHTYPE_SOCKET;
 			break;
 		default:
+			Tcl_DecrRefCount(attrs_dict);
+
 			Tcl_Release(interp);
 
 			return(-EIO);
@@ -826,6 +839,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	Tcl_DictObjGet(interp, attrs_dict, attr_key_packaged, &attr_value);
 	if (attr_value != NULL) {
 		pathinfo->packaged = 1;
+
+		Tcl_DecrRefCount(attr_value);
 	}
 
 	Tcl_DictObjGet(interp, attrs_dict, attr_key_time, &attr_value);
@@ -834,6 +849,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		if (tcl_ret == TCL_OK) {
 			pathinfo->time = attr_value_wide;
 		}
+
+		Tcl_DecrRefCount(attr_value);
 	} else {
 		pathinfo->time = 0;
 	}
@@ -1050,6 +1067,8 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 	for (idx = 0; idx < children_count; idx++) {
 		filler(buf, Tcl_GetString(children[idx]), NULL, 0);
 	}
+
+	Tcl_DecrRefCount(children);
 
 	Tcl_Release(interp);
 
