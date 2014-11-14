@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <pthread.h>
 #include <signal.h>
+#include <limits.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -122,6 +123,8 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		return(NULL);
 	}
 
+	Tcl_Preserve(interp);
+
 	tcl_ret = Tcl_Init(interp);
 	if (tcl_ret != TCL_OK) {
 		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
@@ -130,6 +133,10 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		if (error_string) {
 			*error_string = strdup(Tcl_GetStringResult(interp));
 		}
+
+		Tcl_Release(interp);
+
+		APPFS_DEBUG("Terminating Tcl interpreter.");
 
 		Tcl_DeleteInterp(interp);
 
@@ -145,6 +152,10 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 			*error_string = strdup(Tcl_GetStringResult(interp));
 		}
 
+		Tcl_Release(interp);
+
+		APPFS_DEBUG("Terminating Tcl interpreter.");
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
@@ -158,6 +169,10 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		if (error_string) {
 			*error_string = strdup(Tcl_GetStringResult(interp));
 		}
+
+		Tcl_Release(interp);
+
+		APPFS_DEBUG("Terminating Tcl interpreter.");
 
 		Tcl_DeleteInterp(interp);
 
@@ -177,6 +192,10 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		if (error_string) {
 			*error_string = strdup(Tcl_GetStringResult(interp));
 		}
+
+		Tcl_Release(interp);
+
+		APPFS_DEBUG("Terminating Tcl interpreter.");
 
 		Tcl_DeleteInterp(interp);
 
@@ -199,6 +218,10 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 			*error_string = strdup(Tcl_GetStringResult(interp));
 		}
 
+		Tcl_Release(interp);
+
+		APPFS_DEBUG("Terminating Tcl interpreter.");
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
@@ -213,6 +236,10 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		if (error_string) {
 			*error_string = strdup(Tcl_GetStringResult(interp));
 		}
+
+		Tcl_Release(interp);
+
+		APPFS_DEBUG("Terminating Tcl interpreter.");
 
 		Tcl_DeleteInterp(interp);
 
@@ -232,6 +259,10 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 			*error_string = strdup(Tcl_GetStringResult(interp));
 		}
 
+		Tcl_Release(interp);
+
+		APPFS_DEBUG("Terminating Tcl interpreter.");
+
 		Tcl_DeleteInterp(interp);
 
 		return(NULL);
@@ -243,6 +274,13 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 	 */
 	Tcl_HideCommand(interp, "auto_load_index", "auto_load_index");
 	Tcl_HideCommand(interp, "unknown", "unknown");
+	Tcl_HideCommand(interp, "exit", "exit");
+
+	/*
+	 * Release the hold we have on the interpreter so that it may be
+	 * deleted if needed
+	 */
+	Tcl_Release(interp);
 
 	/*
 	 * Return the completely initialized interpreter
@@ -269,8 +307,10 @@ static Tcl_Interp *appfs_TclInterp(void) {
 
 		interp = NULL;
 
-		thread_interp_reset_key = global_interp_reset_key;
+		pthread_ret = pthread_setspecific(interpKey, interp);
 	}
+
+	thread_interp_reset_key = global_interp_reset_key;
 
 	if (interp == NULL) {
 		interp = appfs_create_TclInterp(NULL);
@@ -281,6 +321,8 @@ static Tcl_Interp *appfs_TclInterp(void) {
 
 		pthread_ret = pthread_setspecific(interpKey, interp);
 		if (pthread_ret != 0) {
+			APPFS_DEBUG("pthread_setspecific() failed.  Terminating Tcl interpreter.");
+
 			Tcl_DeleteInterp(interp);
 
 			return(NULL);
@@ -455,8 +497,11 @@ static char *appfs_get_homedir(uid_t fsuid) {
  * a way that it is unlikely to be duplicated and remains the same for a given
  * file
  */
+#if UINT_MAX < 4294967295
+#error Integer size is too small 
+#endif
 static long long appfs_get_path_inode(const char *path) {
-	long long retval;
+	int retval;
 	const char *p;
 
 	retval = 10;
@@ -464,11 +509,12 @@ static long long appfs_get_path_inode(const char *path) {
 	for (p = path; *p; p++) {
 		retval %= 4290960290ULL;
 		retval += *p;
-		retval <<= 7;
+		retval <<= 6;
 	}
 
 	retval += 10;
-	retval %= 4294967296ULL;
+	retval %= 4294967286ULL;
+	retval += 10;
 
 	return(retval);
 }
@@ -644,8 +690,11 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL, *attr_key_packaged = NULL;
 	int cache_ret;
 	int tcl_ret;
+	uid_t fsuid;
 
-	cache_ret = appfs_get_path_info_cache_get(path, appfs_get_fsuid(), pathinfo);
+	fsuid = appfs_get_fsuid();
+
+	cache_ret = appfs_get_path_info_cache_get(path, fsuid, pathinfo);
 	if (cache_ret == 0) {
 		if (pathinfo->type == APPFS_PATHTYPE_DOES_NOT_EXIST) {
 			return(-ENOENT);
@@ -672,7 +721,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 		pathinfo->type = APPFS_PATHTYPE_DOES_NOT_EXIST;
 
-		appfs_get_path_info_cache_add(path, appfs_get_fsuid(), pathinfo);
+		appfs_get_path_info_cache_add(path, fsuid, pathinfo);
 
 		Tcl_Release(interp);
 
@@ -791,7 +840,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 	Tcl_Release(interp);
 
-	appfs_get_path_info_cache_add(path, appfs_get_fsuid(), pathinfo);
+	appfs_get_path_info_cache_add(path, fsuid, pathinfo);
 
 	return(0);
 }
@@ -1547,6 +1596,29 @@ static void appfs_signal_handler(int sig) {
 }
 
 /*
+ * Terminate a thread
+ */
+static void appfs_terminate_interp(void *_interp) {
+	Tcl_Interp *interp;
+
+	APPFS_DEBUG("Called: _interp = %p", _interp);
+
+	if (_interp == NULL) {
+		APPFS_DEBUG("Terminating thread with no interpreter");
+
+		return;
+	}
+
+	interp = _interp;
+
+	APPFS_DEBUG("Terminating interpreter due to thread termination");
+
+	Tcl_DeleteInterp(interp);
+
+	return;
+}
+
+/*
  * FUSE operations structure
  */
 static struct fuse_operations appfs_operations = {
@@ -1626,7 +1698,7 @@ int main(int argc, char **argv) {
 	 * to its own Tcl interpreter.  Tcl interpreters must be unique per
 	 * thread and new threads are dynamically created by FUSE.
 	 */
-	pthread_ret = pthread_key_create(&interpKey, NULL);
+	pthread_ret = pthread_key_create(&interpKey, appfs_terminate_interp);
 	if (pthread_ret != 0) {
 		fprintf(stderr, "Unable to create TSD key for Tcl.  Aborting.\n");
 
