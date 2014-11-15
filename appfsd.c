@@ -389,7 +389,7 @@ static Tcl_Interp *appfs_TclInterp(void) {
 	}
 
 	if (global_interp_reset_key == -1) {
-		APPFS_DEBUG("Not creating a new interpreter since we are terminating.");
+		APPFS_DEBUG("Returning NULL since we are in the process of terminating all threads.");
 
 		return(NULL);
 	}
@@ -1076,9 +1076,9 @@ static void appfs_exit(void) {
 		APPFS_DEBUG("Error sending kill signal to all threads, aborting anyway.");
 	}
 
-	fuse_exit(fuse_get_context()->fuse);
-
 	appfs_get_path_info_cache_flush(-1, -1);
+
+	fuse_exit(fuse_get_context()->fuse);
 
 	return;
 }
@@ -1394,9 +1394,7 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 	}
 
 	if (size != 0) {
-		APPFS_DEBUG("error: incomplete read (this is an error because FUSE will request the exact length of the file)");
-
-		return(0);
+		APPFS_DEBUG("error: incomplete read (this might be an error because FUSE will request the exact length of the file)");
 	}
 
 	APPFS_DEBUG("Returning: %i", retval);
