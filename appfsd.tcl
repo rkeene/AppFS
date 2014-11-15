@@ -625,12 +625,18 @@ namespace eval ::appfs {
 				set retval(localpath) $localpath
 				set retval(whiteoutpath) $whiteoutpath
 
-				if {$localpath != "" && [file exists $localpath]} {
-					set retval(is_localfile) 1
-					catch {
-						_as_user {
+				unset -nocomplain localpathinfo
+				if {$localpath != ""} {
+					_as_user {
+						catch {
 							file lstat $localpath localpathinfo
 						}
+					}
+				}
+
+				if {$localpath != "" && [info exists localpathinfo]} {
+					set retval(is_localfile) 1
+					catch {
 						set retval(time) $localpathinfo(mtime)
 
 						switch -- $localpathinfo(type) {
