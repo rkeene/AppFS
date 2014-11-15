@@ -600,25 +600,27 @@ static char *appfs_get_homedir(uid_t fsuid) {
  * Generate an inode for a given path.  The inode should be computed in such
  * a way that it is unlikely to be duplicated and remains the same for a given
  * file
+ *
+ * Current implementation is an FNV-1a 32-bit
  */
 #if UINT_MAX < 4294967295
 #error Integer size is too small 
 #endif
 static unsigned long long appfs_get_path_inode(const char *path) {
-	int retval;
-	const char *p;
+	unsigned int retval;
+	const unsigned char *p;
 
-	retval = 10;
+	retval = 2166136261; /* FNV-1a 32-bit offset_basis */
 
-	for (p = path; *p; p++) {
-		retval %= 4290960290ULL;
-		retval += *p;
-		retval <<= 6;
+	for (p = (unsigned char *) path; *p; p++) {
+		retval ^= (int) *p;
+#if 0
+		retval *= 16777619; /* FNV-1a 32-bit prime */
+#else
+		/* GCC Optimized replacement */
+		retval += (retval << 1) + (retval << 4) + (retval << 7) + (retval << 8) + (retval << 24);
+#endif
 	}
-
-	retval += 10;
-	retval %= 4294967286ULL;
-	retval += 10;
 
 	return(retval);
 }
