@@ -1641,6 +1641,32 @@ static int appfs_fuse_chmod(const char *path, mode_t mode) {
 	return(chmod_ret);
 }
 
+static int appfs_fuse_symlink(const char *oldpath, const char *newpath) {
+	char *real_path;
+	int symlink_ret;
+
+	APPFS_DEBUG("Enter (path = %s, %s)", oldpath, newpath);
+
+	real_path = appfs_prepare_to_create(newpath);
+	if (real_path == NULL) {
+		return(-EIO);
+	}
+
+	appfs_simulate_user_fs_enter();
+
+	symlink_ret = symlink(oldpath, real_path);
+
+	appfs_simulate_user_fs_leave();
+
+	free(real_path);
+
+	if (symlink_ret != 0) {
+		return(errno * -1);
+	}
+
+	return(0);
+}
+
 /*
  * SQLite3 mode: Execute raw SQL and return success or failure
  */
@@ -1908,6 +1934,7 @@ static struct fuse_operations appfs_operations = {
 	.rmdir     = appfs_fuse_unlink_rmdir,
 	.mkdir     = appfs_fuse_mkdir,
 	.chmod     = appfs_fuse_chmod,
+	.symlink   = appfs_fuse_symlink,
 };
 
 /*
