@@ -25,7 +25,25 @@
 
 /* Debugging macros */
 #ifdef DEBUG
-#define APPFS_DEBUG(x...) { fprintf(stderr, "[debug] %s:%i:%s: ", __FILE__, __LINE__, __func__); fprintf(stderr, x); fprintf(stderr, "\n"); }
+int appfs_debug_fd = STDERR_FILENO;
+#define APPFS_DEBUG(x...) { \
+	char buf[8192]; \
+	int bufoff = 0; \
+	if (appfs_debug_fd == -1) { \
+		appfs_debug_fd = open("/tmp/appfsd.log", O_WRONLY | O_APPEND | O_CREAT, 0600); \
+	}; \
+	bufoff = snprintf(buf, sizeof(buf), "[debug] [t=%llx] %s:%i:%s: ", (unsigned long long) pthread_self(), __FILE__, __LINE__, __func__); \
+	if (bufoff < sizeof(buf)) { \
+		bufoff += snprintf(buf + bufoff, sizeof(buf) - bufoff, x); \
+	}; \
+	if (bufoff < sizeof(buf)) { \
+		bufoff += snprintf(buf + bufoff, sizeof(buf) - bufoff, "\n");\
+	} \
+	if (bufoff > sizeof(buf)) { \
+		bufoff = sizeof(buf); \
+	}; \
+	write(appfs_debug_fd, buf, bufoff); \
+}
 #else
 #define APPFS_DEBUG(x...) /**/
 #endif
@@ -63,6 +81,7 @@ pthread_mutex_t appfs_tcl_big_global_lock = PTHREAD_MUTEX_INITIALIZER;
 #define appfs_call_libtcl_enter pthread_mutex_lock(&appfs_tcl_big_global_lock);
 #define appfs_call_libtcl_exit pthread_mutex_unlock(&appfs_tcl_big_global_lock);
 #else
+#warning Using a Threaded Tcl interpreter may cause memory leaks
 #define appfs_call_libtcl_enter /**/
 #define appfs_call_libtcl_exit /**/
 #endif
@@ -381,6 +400,8 @@ static Tcl_Interp *appfs_TclInterp(void) {
 		interp = appfs_create_TclInterp(NULL);
 
 		if (interp == NULL) {
+			APPFS_DEBUG("Create interp failed, returningin failure.");
+
 			return(NULL);
 		}
 
@@ -409,6 +430,8 @@ static int appfs_Tcl_Eval(Tcl_Interp *interp, int objc, const char *cmd, ...) {
 	int i;
 
 	if (interp == NULL) {
+		APPFS_DEBUG("Invalid interpreter passed in, returning in failure.");
+
 		return(TCL_ERROR);
 	}
 
@@ -478,6 +501,8 @@ static uid_t appfs_get_fsuid(void) {
 	if (ctx == NULL) {
 		/* Unable to lookup user for some reason */
 		/* Return an unprivileged user ID */
+		APPFS_DEBUG("Unable to lookup user for some reason, returninng user ID of 1");
+
 		return(1);
 	}
 
@@ -500,6 +525,8 @@ static gid_t appfs_get_fsgid(void) {
 	if (ctx == NULL) {
 		/* Unable to lookup user for some reason */
 		/* Return an unprivileged user ID */
+		APPFS_DEBUG("Unable to lookup group for some reason, returninng group ID of 1");
+
 		return(1);
 	}
 
@@ -674,6 +701,7 @@ static void appfs_get_path_info_cache_add(const char *path, uid_t uid, struct ap
 
 		return;
 	}
+
 	return;
 }
 
@@ -777,10 +805,14 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	cache_ret = appfs_get_path_info_cache_get(path, fsuid, pathinfo);
 	if (cache_ret == 0) {
 		if (pathinfo->type == APPFS_PATHTYPE_DOES_NOT_EXIST) {
+			APPFS_DEBUG("Returning from cache: does not exist \"%s\"", path);
+
 			return(-ENOENT);
 		}
 
 		if (pathinfo->type == APPFS_PATHTYPE_INVALID) {
+			APPFS_DEBUG("Returning from cache: invalid object \"%s\"", path);
+
 			return(-EIO);
 		}
 
@@ -789,6 +821,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
+		APPFS_DEBUG("error: Unable to get an interpreter");
+
 		return(-EIO);
 	}
 
@@ -846,6 +880,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	}
 
 	if (attr_value == NULL) {
+		APPFS_DEBUG("error: Unable to get type for \"%s\" from Tcl", path);
+
 		appfs_call_libtcl(Tcl_Release(interp);)
 
 		return(-EIO);
@@ -939,6 +975,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 	if (retval == 0) {
 		appfs_get_path_info_cache_add(path, fsuid, pathinfo);
+	} else {
+		APPFS_DEBUG("error: Invalid type for \"%s\" from Tcl", path);
 	}
 
 	return(retval);
@@ -1095,6 +1133,12 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 
 	retval = appfs_get_path_info(path, &pathinfo);
 	if (retval != 0) {
+		if (retval == -ENOENT) {
+			APPFS_DEBUG("get_path_info returned ENOENT, returning it as well.");
+		} else {
+			APPFS_DEBUG("error: get_path_info failed");
+		}
+
 		return(retval);
 	}
 
@@ -1165,6 +1209,8 @@ static int appfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t fille
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
+		APPFS_DEBUG("error: Unable to get an interpreter");
+
 		return(0);
 	}
 
@@ -1224,6 +1270,8 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 	if ((fi->flags & (O_WRONLY|O_CREAT)) == (O_CREAT|O_WRONLY)) {
 		/* The file will be created if it does not exist */
 		if (gpi_ret != 0 && gpi_ret != -ENOENT) {
+			APPFS_DEBUG("error: get_path_info failed");
+
 			return(gpi_ret);
 		}
 
@@ -1237,6 +1285,8 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 	} else {
 		/* The file must already exist */
 		if (gpi_ret != 0) {
+			APPFS_DEBUG("error: get_path_info failed");
+
 			return(gpi_ret);
 		}
 
@@ -1248,11 +1298,15 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 	}
 
 	if (pathinfo.type == APPFS_PATHTYPE_DIRECTORY) {
+		APPFS_DEBUG("error: Asked to open a directory.");
+
 		return(-EISDIR);
 	}
 
 	interp = appfs_TclInterp();
 	if (interp == NULL) {
+		APPFS_DEBUG("error: Unable to get an interpreter");
+
 		return(-EIO);
 	}
 
@@ -1277,6 +1331,8 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 	appfs_call_libtcl(Tcl_Release(interp);)
 
 	if (real_path == NULL) {
+		APPFS_DEBUG("error: real_path was NULL.")
+
 		return(-EIO);
 	}
 
@@ -1285,7 +1341,9 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 	fh = open(real_path, fi->flags, 0600);
 
 	if (fh < 0) {
-		return(-EIO);
+		APPFS_DEBUG("error: open failed");
+
+		return(errno * -1);
 	}
 
 	fi->fh = fh;
@@ -1300,44 +1358,86 @@ static int appfs_fuse_close(const char *path, struct fuse_file_info *fi) {
 
 	close_ret = close(fi->fh);
 	if (close_ret != 0) {
-		return(-EIO);
+		APPFS_DEBUG("error: close failed");
+
+		return(errno * -1);
 	}
 
 	return(0);
 }
 
 static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-	off_t lseek_ret;
 	ssize_t read_ret;
+	int retval;
 
-	APPFS_DEBUG("Enter (path = %s, ...)", path);
+	APPFS_DEBUG("Enter (path = %s, buf, %lli, %lli, fd=%lli)", path, (long long) size, (long long) offset, (long long) fi->fh);
 
-	lseek_ret = lseek(fi->fh, offset, SEEK_SET);
-	if (lseek_ret != offset) {
-		return(-EIO);
+	retval = 0;
+
+	while (size != 0) {
+		read_ret = pread(fi->fh, buf, size, offset);
+
+		if (read_ret < 0) {
+			APPFS_DEBUG("error: read failed");
+
+			return(errno * -1);
+		}
+
+		if (read_ret == 0) {
+			break;
+		}
+
+		size -= read_ret;
+		buf  += read_ret;
+		offset += read_ret;
+		retval += read_ret;
 	}
 
-	read_ret = read(fi->fh, buf, size);
+	if (size != 0) {
+		APPFS_DEBUG("error: incomplete read (this is an error because FUSE will request the exact length of the file)");
 
-	return(read_ret);
+		return(0);
+	}
+
+	APPFS_DEBUG("Returning: %i", retval);
+
+	return(retval);
 }
 
 static int appfs_fuse_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-	off_t lseek_ret;
 	ssize_t write_ret;
+	int retval;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
 	appfs_get_path_info_cache_rm(path, appfs_get_fsuid());
 
-	lseek_ret = lseek(fi->fh, offset, SEEK_SET);
-	if (lseek_ret != offset) {
-		return(-EIO);
+	retval = 0;
+
+	while (size != 0) {
+		write_ret = pwrite(fi->fh, buf, size, offset);
+
+		if (write_ret < 0) {
+			APPFS_DEBUG("error: write failed");
+
+			return(errno * -1);
+		}
+
+		if (write_ret == 0) {
+			break;
+		}
+
+		size -= write_ret;
+		buf  += write_ret;
+		offset += write_ret;
+		retval += write_ret;
 	}
 
-	write_ret = write(fi->fh, buf, size);
+	if (size != 0) {
+		APPFS_DEBUG("error: incomplete write");
+	}
 
-	return(write_ret);
+	return(retval);
 }
 
 static int appfs_fuse_mknod(const char *path, mode_t mode, dev_t device) {
@@ -1768,7 +1868,7 @@ static void appfs_signal_handler(int sig) {
 /*
  * Terminate a thread
  */
-static void appfs_terminate_interp(void *_interp) {
+static void appfs_terminate_interp_and_thread(void *_interp) {
 	Tcl_Interp *interp;
 
 	APPFS_DEBUG("Called: _interp = %p", _interp);
@@ -1786,6 +1886,8 @@ static void appfs_terminate_interp(void *_interp) {
 	appfs_call_libtcl(
 		Tcl_DeleteInterp(interp);
 	)
+
+	Tcl_FinalizeThread();
 
 	return;
 }
@@ -1870,7 +1972,7 @@ int main(int argc, char **argv) {
 	 * to its own Tcl interpreter.  Tcl interpreters must be unique per
 	 * thread and new threads are dynamically created by FUSE.
 	 */
-	pthread_ret = pthread_key_create(&interpKey, appfs_terminate_interp);
+	pthread_ret = pthread_key_create(&interpKey, appfs_terminate_interp_and_thread);
 	if (pthread_ret != 0) {
 		fprintf(stderr, "Unable to create TSD key for Tcl.  Aborting.\n");
 
