@@ -1549,6 +1549,8 @@ static int appfs_fuse_unlink_rmdir(const char *path) {
 		return(-EIO);
 	}
 
+	appfs_call_libtcl(Tcl_Preserve(interp);)
+
 	tcl_ret = appfs_Tcl_Eval(interp, 2, "::appfs::unlinkpath", path);
 	if (tcl_ret != TCL_OK) {
 		APPFS_DEBUG("::appfs::unlinkpath(%s) failed.", path);
