@@ -1,5 +1,7 @@
 #! /usr/bin/env bash
 
+PATH="${PATH}:$(dirname "$(which "$0")")"
+
 if [ "$1" == '--cpio' ]; then
 	shift
 
@@ -13,8 +15,10 @@ else
 fi
 appfsdir="$2"
 
+shift; shift
+
 if [ -z "${pkgsdir}" -a -z "${pkgfile}" ] || [ -z "${appfsdir}" ]; then
-	echo 'Usage: appfs-mk {--cpio <pkgfile>|<pkgsdir>} <appfsdir>' >&2
+	echo 'Usage: appfs-mk {--cpio <pkgfile>|<pkgsdir>} <appfsdir> [<site-key> [<site-certificate>]]' >&2
 
 	exit 1
 fi
@@ -214,7 +218,21 @@ rm -f "${packagelistfile}.new"
 packagelistfile_hash="$(sha1 "${packagelistfile}")"
 mv "${packagelistfile}" "${appfsdir}/sha1/${packagelistfile_hash}"
 
-echo "${packagelistfile_hash},sha1" > "${appfsdir}/index"
+if [ -n "$APPFS_SIGN_IN_PLACE" ]; then
+	indexfile="${appfsdir}/index"
+else
+	indexfile="${appfsdir}/index.new"
+fi
+
+echo "${packagelistfile_hash},sha1" > "${indexfile}"
+
+if [ -x "$(which 'appfs-cert' 2>/dev/null)"]; then
+	appfs-cert sign-site "${indexfile}" "$@"
+fi
+
+if [ -z "$APPFS_SIGN_IN_PLACE" ]; then
+	mv "${indexfile}" "${appfsdir}/index"
+fi
 
 case "${mode}" in
 	file)
