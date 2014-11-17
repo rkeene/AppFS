@@ -74,7 +74,7 @@ close $fd
 }
 
 function generate_key() {
-	read_password 'Password for Site Key: ' SITE_PASSWORD
+	read_password 'Password for Site Key being generated: ' SITE_PASSWORD
 
 	export SITE_PASSWORD
 
@@ -110,7 +110,11 @@ function generate_csr() {
 
 	if [ -f "${SITE_KEY_FILE}" ]; then
 		echo 'Key file already exists.'
-		read_password 'Password for (existing) Site Key: ' SITE_PASSWORD
+		if cat "${SITE_KEY_FILE}" | grep -i '^Proc-Type: .*,ENCRYPTED' >/dev/null; then
+			read_password 'Password for (existing) Site Key: ' SITE_PASSWORD
+		else
+			SITE_PASSWORD=""
+		fi
 
 		export SITE_PASSWORD
 	else
@@ -156,7 +160,9 @@ function generate_cert() {
 		read_text 'Certificate Authority (CA) Key Filename: ' CA_KEY_FILE
 	fi
 
-	read_password 'Certificate Authority (CA) Password: ' CA_PASSWORD
+	if cat "${CA_KEY_FILE}" | grep -i '^Proc-Type: .*,ENCRYPTED' >/dev/null; then
+		read_password 'Certificate Authority (CA) Password: ' CA_PASSWORD
+	fi
 
 	SITE_SERIAL_NUMBER="$(uuidgen | dd conv=ucase 2>/dev/null | sed 's@-@@g;s@^@ibase=16; @' | bc -lq)"
 
@@ -184,7 +190,13 @@ puts $cert
 
 	echo "${USER}@${HOSTNAME} $(date): ${SITE_SERIAL_NUMBER} ${SITE_SUBJECT}" >> "${CA_KEY_FILE}.issued"
 
-	echo "${SITE_CERT}"
+	echo "${SITE_CERT}" | (
+		if [ -z "${SITE_HOSTNAME}" ]; then
+			cat
+		else
+			tee "AppFS_Site_${SITE_HOSTNAME}.crt"
+		fi
+	)
 }
 
 function generate_selfsigned() {
@@ -230,7 +242,12 @@ function sign_site() {
 	read_text 'AppFS Site Index file: ' SITE_INDEX_FILE
 	read_text 'Site Key filename: ' SITE_KEY_FILE
 	read_text 'Site Certificate filename: ' SITE_CERT_FILE
-	read_password "Password for Key (${SITE_KEY_FILE}): " SITE_PASSWORD
+
+	if cat "${SITE_KEY_FILE}" | grep -i '^Proc-Type: .*,ENCRYPTED' >/dev/null; then
+		read_password "Password for Key (${SITE_KEY_FILE}): " SITE_PASSWORD
+	else
+		SITE_PASSWORD=""
+	fi
 
 	export SITE_INDEX_FILE SITE_KEY_FILE SITE_CERT_FILE SITE_PASSWORD
 
