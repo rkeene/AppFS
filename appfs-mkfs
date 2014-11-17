@@ -226,7 +226,7 @@ fi
 
 echo "${packagelistfile_hash},sha1" > "${indexfile}"
 
-if [ -x "$(which 'appfs-cert' 2>/dev/null)"]; then
+if [ -x "$(which 'appfs-cert' 2>/dev/null)" ]; then
 	appfs-cert sign-site "${indexfile}" "$@"
 fi
 
