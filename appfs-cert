@@ -279,11 +279,17 @@ lappend data $signature
 
 set data [join $data ","]
 
-set fd [open "$::env(SITE_INDEX_FILE).new" "w"]
-puts $fd $data
-close $fd
+if {![info exists ::env(APPFS_SIGN_IN_PLACE)]} {
+	set fd [open "$::env(SITE_INDEX_FILE).new" "w" 0644]
+	puts $fd $data
+	close $fd
 
-file rename -force -- "$::env(SITE_INDEX_FILE).new" $::env(SITE_INDEX_FILE)
+	file rename -force -- "$::env(SITE_INDEX_FILE).new" $::env(SITE_INDEX_FILE)
+} else {
+	set fd [open "$::env(SITE_INDEX_FILE)" "w" 0644]
+	puts $fd $data
+	close $fd
+}
 
 _EOF_
 )"
