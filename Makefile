@@ -1,3 +1,4 @@
+APPFS_VERSION = 0.1
 CC = gcc
 PKG_CONFIG = pkg-config
 FUSE_CFLAGS = $(shell $(PKG_CONFIG) --cflags fuse)
@@ -57,6 +58,15 @@ install: appfsd appfs-cache appfs-mkfs
 	cp appfsd '$(DESTDIR)$(sbindir)/'
 	cp appfs-cache '$(DESTDIR)$(sbindir)/'
 	cp appfs-mkfs '$(DESTDIR)$(bindir)/'
+
+appfs-$(APPFS_VERSION).cpio: appfs-cache appfs-cert appfs-mkfs
+	rm -rf __TMP__
+	mkdir -p __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin
+	cp appfs-cache appfs-cert appfs-mkfs __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin
+	chmod 755 __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin/*
+	( cd __TMP__ && find appfs/noarch-noarch/$(APPFS_VERSION) | cpio --owner 0:0 -H newc -o ) > appfs-$(APPFS_VERSION).cpio.new
+	rm -rf __TMP__
+	mv appfs-$(APPFS_VERSION).cpio.new appfs-$(APPFS_VERSION).cpio
 
 clean:
 	rm -f appfsd appfsd.o
