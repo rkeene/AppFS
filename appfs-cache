@@ -90,4 +90,6 @@ case "$1" in
 		;;
 esac
 
+pkill -HUP appfsd
+
 exit 0
