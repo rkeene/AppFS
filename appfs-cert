@@ -1,0 +1,304 @@
+#! /usr/bin/env bash
+
+appfsd_options=()
+
+CA_CERT_FILE='AppFS_CA.crt'
+CA_KEY_FILE='AppFS_CA.key'
+export CA_CERT_FILE CA_KEY_FILE
+
+function call_appfsd() {
+	appfsd "${appfsd_options[@]}" "$@"
+}
+
+function read_password() {
+	local prompt variable
+
+	prompt="$1"
+	variable="$2"
+
+	if [ -z "$(eval echo '$'${variable})" ]; then
+		echo -n "${prompt}" >&2
+
+		stty -echo
+		IFS='' read -r $variable
+		stty echo
+		echo '' >&2
+	fi
+}
+
+function read_text() {
+	local prompt variable
+
+	prompt="$1"
+	variable="$2"
+
+	if [ -z "$(eval echo '$'${variable})" ]; then
+		echo -n "${prompt}" >&2
+
+		IFS='' read -r $variable
+	fi
+}
+
+function generate_ca_cert_and_key() {
+	read_text 'Certificate Authority (CA) Company Name (O): ' CA_DN_S_O
+	read_text 'Certificate Authority (CA) Responsible Party Name (CN): ' CA_DN_S_CN
+	read_password 'Password for Certificate Authority Key: ' CA_PASSWORD
+
+	export CA_DN_S_O CA_DN_S_CN CA_PASSWORD
+
+	call_appfsd --tcl '
+package require pki
+
+set filename_cert $::env(CA_CERT_FILE)
+set filename_key  $::env(CA_KEY_FILE)
+
+puts -nonewline "Generating RSA Key..."
+flush stdout
+set key [pki::rsa::generate 2048]
+puts " Done."
+
+lappend key subject "O=$::env(CA_DN_S_O),CN=$::env(CA_DN_S_CN)"
+
+set ca [pki::x509::create_cert $key $key 1 [clock seconds] [clock add [clock seconds] 5 years] 1 [list] 1]
+
+puts "Writing \"$filename_cert\""
+set fd [open $filename_cert w 0644]
+puts $fd $ca
+close $fd
+
+puts "Writing \"$filename_key\""
+set fd [open $filename_key w 0400]
+puts $fd [pki::key $key $::env(CA_PASSWORD)]
+close $fd
+'
+}
+
+function generate_key() {
+	read_password 'Password for Site Key: ' SITE_PASSWORD
+
+	export SITE_PASSWORD
+
+	call_appfsd --tcl '
+package require pki
+
+if {[info exists ::env(SITE_KEY_FILE)]} {
+	set filename_key $::env(SITE_KEY_FILE)
+} else {
+	set filename_key "AppFS_Site.key"
+}
+
+puts -nonewline "Generating RSA Key..."
+flush stdout
+set key [pki::rsa::generate 2048]
+puts " Done."
+
+puts "Writing \"$filename_key\""
+set fd [open $filename_key w 0400]
+puts $fd [pki::key $key $::env(SITE_PASSWORD)]
+close $fd
+'
+}
+
+function generate_csr() {
+	read_text 'Site hostname: ' SITE_HOSTNAME
+
+	if [ -z "${SITE_KEY_FILE}" ]; then
+		SITE_KEY_FILE="AppFS_Site_${SITE_HOSTNAME}.key"
+	fi
+
+	export SITE_HOSTNAME SITE_KEY_FILE
+
+	if [ -f "${SITE_KEY_FILE}" ]; then
+		echo 'Key file already exists.'
+		read_password 'Password for (existing) Site Key: ' SITE_PASSWORD
+
+		export SITE_PASSWORD
+	else
+		generate_key
+	fi
+
+call_appfsd --tcl '
+package require pki
+
+if {[info exists ::env(SITE_KEY_FILE)]} {
+        set filename_key $::env(SITE_KEY_FILE)
+} else {
+        set filename_key "AppFS_Site.key"
+}
+set filename_csr "[file rootname $filename_key].csr"
+
+set key [read [open $filename_key]]
+
+set key [::pki::pkcs::parse_key $key $::env(SITE_PASSWORD)]
+
+set csr [::pki::pkcs::create_csr $key [list CN $::env(SITE_HOSTNAME)] 1]
+
+puts "Writing \"$filename_csr\""
+set fd [open $filename_csr w 0644]
+puts $fd $csr
+close $fd
+'
+}
+
+function generate_cert() {
+	SITE_CSR_FILE="$1"
+
+	read_text 'Certificate Signing Request (CSR) file: ' SITE_CSR_FILE
+
+	if [ -z "${SITE_CSR_FILE}" ]; then
+		generate_csr || exit 1
+
+		SITE_CSR_FILE="$(echo "${SITE_KEY_FILE}" | sed 's@.[^\.]*$@@').csr"
+	fi
+
+	if [ ! -e "${CA_CERT_FILE}" -o ! -e "${CA_KEY_FILE}" ]; then
+		read_text 'Certificate Authority (CA) Certificate Filename: ' CA_CERT_FILE
+		read_text 'Certificate Authority (CA) Key Filename: ' CA_KEY_FILE
+	fi
+
+	read_password 'Certificate Authority (CA) Password: ' CA_PASSWORD
+
+	SITE_SERIAL_NUMBER="$(uuidgen | dd conv=ucase 2>/dev/null | sed 's@-@@g;s@^@ibase=16; @' | bc -lq)"
+
+	export SITE_CSR_FILE SITE_SERIAL_NUMBER CA_CERT_FILE CA_KEY_FILE CA_PASSWORD
+
+	SITE_CERT="$(call_appfsd --tcl '
+package require pki
+
+set csr [read [open $::env(SITE_CSR_FILE)]]
+set csr [::pki::pkcs::parse_csr $csr]
+
+set ca_key [read [open $::env(CA_KEY_FILE)]]
+set ca_cert [read [open $::env(CA_CERT_FILE)]]
+
+set ca_key [::pki::pkcs::parse_key $ca_key $::env(CA_PASSWORD)]
+set ca_cert [::pki::x509::parse_cert $ca_cert]
+set ca_key [concat $ca_key $ca_cert]
+
+set cert [::pki::x509::create_cert $csr $ca_key $::env(SITE_SERIAL_NUMBER) [clock seconds] [clock add [clock seconds] 1 year] 0 [list] 1]
+
+puts $cert
+')"
+
+	SITE_SUBJECT="$(echo "${SITE_CERT}" | openssl x509 -subject -noout | sed 's@.*= @@')"
+
+	echo "${USER}@${HOSTNAME} $(date): ${SITE_SERIAL_NUMBER} ${SITE_SUBJECT}" >> "${CA_KEY_FILE}.issued"
+
+	echo "${SITE_CERT}"
+}
+
+function generate_selfsigned() {
+	read_password 'Password for Key: ' SITE_PASSWORD
+	read_text 'Site hostname: ' SITE_HOSTNAME
+
+	SITE_SERIAL_NUMBER="$(uuidgen | dd conv=ucase 2>/dev/null | sed 's@-@@g;s@^@ibase=16; @' | bc -lq)"
+
+	export SITE_PASSWORD SITE_HOSTNAME SITE_SERIAL_NUMBER
+
+	call_appfsd --tcl '
+package require pki
+
+set filename_cert "AppFS_Site_$::env(SITE_HOSTNAME).crt"
+set filename_key  "AppFS_Site_$::env(SITE_HOSTNAME).key"
+
+puts -nonewline "Generating RSA Key..."
+flush stdout
+set key [pki::rsa::generate 2048]
+puts " Done."
+
+lappend key subject "CN=$::env(SITE_HOSTNAME)"
+
+set cert [pki::x509::create_cert $key $key $::env(SITE_SERIAL_NUMBER) [clock seconds] [clock add [clock seconds] 1 years] 1 [list] 1]
+
+puts "Writing \"$filename_cert\""
+set fd [open $filename_cert w 0644]
+puts $fd $cert
+close $fd
+
+puts "Writing \"$filename_key\""
+set fd [open $filename_key w 0400]
+puts $fd [pki::key $key $::env(SITE_PASSWORD)]
+close $fd
+'
+}
+
+function sign_site() {
+	SITE_INDEX_FILE="$1"
+	SITE_KEY_FILE="$2"
+	SITE_CERT_FILE="$3"
+
+	read_text 'AppFS Site Index file: ' SITE_INDEX_FILE
+	read_text 'Site Key filename: ' SITE_KEY_FILE
+	read_text 'Site Certificate filename: ' SITE_CERT_FILE
+	read_password "Password for Key (${SITE_KEY_FILE}): " SITE_PASSWORD
+
+	export SITE_INDEX_FILE SITE_KEY_FILE SITE_CERT_FILE SITE_PASSWORD
+
+	call_appfsd --tcl "$(cat <<\_EOF_
+package require pki
+
+set fd [open $::env(SITE_INDEX_FILE)]
+gets $fd line
+close $fd
+
+set line [split $line ","]
+
+# Data to be signed
+set data [join [lrange $line 0 1] ","]
+
+set key [read [open $::env(SITE_KEY_FILE)]]
+set key [::pki::pkcs::parse_key $key $::env(SITE_PASSWORD)]
+
+set cert [read [open $::env(SITE_CERT_FILE)]]
+array set cert_arr [::pki::_parse_pem $cert "-----BEGIN CERTIFICATE-----" "-----END CERTIFICATE-----"]
+binary scan $cert_arr(data) H* cert
+
+set signature [::pki::sign $data $key]
+binary scan $signature H* signature
+
+set data [split $data ","]
+lappend data $cert
+lappend data $signature
+
+set data [join $data ","]
+
+set fd [open "$::env(SITE_INDEX_FILE).new" "w"]
+puts $fd $data
+close $fd
+
+file rename -force -- "$::env(SITE_INDEX_FILE).new" $::env(SITE_INDEX_FILE)
+
+_EOF_
+)"
+}
+
+cmd="$1"
+shift
+case "${cmd}" in
+	generate-ca)
+		generate_ca_cert_and_key "$@" || exit 1
+		;;
+	generate-key)
+		# Hidden, users should use "generate-csr" instead
+		generate_key "$@" || exit 1
+		;;
+	generate-csr)
+		generate_csr "$@" || exit 1
+		;;
+	sign-csr|generate-cert)
+		generate_cert "$@" || exit 1
+		;;
+	generate-selfsigned)
+		generate_selfsigned "$@" || exit 1
+		;;
+	sign-site)
+		sign_site "$@" || exit 1
+		;;
+	*)
+		echo 'Usage: appfs-cert {generate-selfsigned|generate-ca|generate-csr|sign-csr|generate-cert|sign-site}' >&2
+
+		exit 1
+		;;
+esac
+
+exit 0

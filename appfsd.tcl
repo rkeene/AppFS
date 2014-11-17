@@ -24,7 +24,7 @@ namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
 	variable ttl 3600
 	variable nttl 60
-
+	variable trusted_cas [list]
 
 	proc _hash_sep {hash {seps 4}} {
 		for {set idx 0} {$idx < $seps} {incr idx} {
@@ -97,7 +97,27 @@ namespace eval ::appfs {
 		return true
 	}
 
-	proc _verifySignatureAndCertificate {certificate signature} {
+	proc _verifySignatureAndCertificate {hostname certificate signature hash} {
+		set certificate [binary format "H*" $certificate]
+		set signature   [binary format "H*" $signature]
+
+		set certificate [::pki::x509::parse_cert $certificate]
+
+		array set certificate_arr $certificate
+		set certificate_cn [::pki::x509::_dn_to_cn $certificate_arr(subject)]
+
+		if {![::pki::verify $signature "$hash,sha1" $certificate]} {
+			return false
+		}
+
+		if {[string tolower $certificate_cn] != [string tolower $hostname]} {
+			return false
+		}
+
+		if {![::pki::x509::verify_cert $certificate $::appfs::trusted_cas]} {
+			return false
+		}
+
 		return true
 	}
 
@@ -152,12 +172,40 @@ namespace eval ::appfs {
 			return
 		}
 
-		# Force [parray] to be loaded
+		# Force [parray] and [clock] to be loaded
 		catch {
 			parray does_not_exist
 		}
+		catch {
+			clock seconds
+		}
+		catch {
+			clock add [clock seconds] 3 seconds
+		}
 
 		set ::appfs::init_called 1
+
+		# Add a default CA to list of trusted CAs
+		lappend ::appfs::trusted_cas [::pki::x509::parse_cert {
+-----BEGIN CERTIFICATE-----
+MIIC7DCCAdSgAwIBAgIBATANBgkqhkiG9w0BAQUFADAvMRIwEAYDVQQKEwlSb3kg
+S2VlbmUxGTAXBgNVBAMTEEFwcEZTIEtleSBNYXN0ZXIwHhcNMTQxMTE3MjAxNzI4
+WhcNMTkxMTE3MjAxNzI4WjAvMRIwEAYDVQQKEwlSb3kgS2VlbmUxGTAXBgNVBAMT
+EEFwcEZTIEtleSBNYXN0ZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
+AQCq6uSK46yG5b6RJWwRlvw5glAnjsc1GiX3duXA0vG4qnKUnDtl/jcMmq2GMOB9
+Iy1tjabEHA0MhW2j7Vwe/O9MLFJkJ30M1PVD7YZRRNaAsz3UWIKEjPI7BBc32KOm
+BL3CTXCCdzllL1HhVbnM5iCAmgHcg1DUk/EvWXvnEDxXRy2lV9mQsmDedrffY7Wl
+Or57nlczaMuPLpyRSkv75PAnjQJxT3sWlBpy+/H9ImudQdpJNf/FtxcqN7iDwH5B
+vIceYEtDVxFsvo5HOVkSl9jeo5E4Gpe3wyfRhoqB2UkaW1Kq0iH5R+00S760xQMx
+LL9L1duhu1dL7HsmEw7IeYURAgMBAAGjEzARMA8GA1UdEwEB/wQFMAMBAf8wDQYJ
+KoZIhvcNAQEFBQADggEBAKhO4ZSzYP37BqixNHKK9+gSeC6Fga85iLWhwpPW0kSl
+z03hal80KZ+kPMzb8C52N283tQNAqJ9Q8akDPZxSzzMUVOGpGw2pJ7ZswKDz0ZTa
+0edq/gdT/HrdegvNtDPc2jona5FVOYqwdcz5kbl1UWBaBp3VXUgcYjXSRaBK43Wd
+cveiDUeZw7gHqRSN/AyYUCtJzWmvGsJuIFhMBonuz8jylhyMJCYJFT4iMUC8MNIw
+niX1xx+Nu6fPV5ZZHj9rbhiBaLjm+tkDwtPgA3j2pxvHKYptuWxeYO+9DDNa9sCb
+E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
+-----END CERTIFICATE-----
+}]
 
 		# Load configuration file
 		set config_file [file join $::appfs::cachedir config]
@@ -243,7 +291,7 @@ namespace eval ::appfs {
 			return -code error "Invalid hash: $indexhash"
 		}
 
-		if {![_verifySignatureAndCertificate $indexhashcert $indexhashsig]} {
+		if {![_verifySignatureAndCertificate $hostname $indexhashcert $indexhashsig $indexhash]} {
 			return -code error "Invalid signature or certificate from $hostname"
 		}
 
