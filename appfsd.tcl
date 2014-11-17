@@ -281,8 +281,9 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			return -code error "Unable to fetch $url"
 		}
 
+		set indexhash_data [string trim $indexhash_data "\r\n"]
 		set indexhash_data [split $indexhash_data ","]
-		set indexhash [lindex $indexhash_data 0]
+		set indexhash       [lindex $indexhash_data 0]
 		set indexhashmethod [lindex $indexhash_data 1]
 		set indexhashcert   [lindex $indexhash_data 2]
 		set indexhashsig    [lindex $indexhash_data 3]
