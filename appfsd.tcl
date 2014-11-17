@@ -165,6 +165,8 @@ namespace eval ::appfs {
 			file mkdir $::appfs::cachedir
 
 			sqlite3 ::appfs::db [file join $::appfs::cachedir cache.db]
+
+			::appfs::db timeout 30000
 		}
 
 		# Create tables
