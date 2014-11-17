@@ -1721,7 +1721,7 @@ static int appfs_tcl(const char *tcl) {
 	tcl_result = Tcl_GetStringResult(interp);
 
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "[error] %s\n", tcl_result);
+		fprintf(stderr, "[error] %s\n", Tcl_GetVar(interp, "errorInfo", TCL_GLOBAL_ONLY));
 
 		return(1);
 	}
