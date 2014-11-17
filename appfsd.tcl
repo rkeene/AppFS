@@ -97,6 +97,10 @@ namespace eval ::appfs {
 		return true
 	}
 
+	proc _verifySignatureAndCertificate {certificate signature} {
+		return true
+	}
+
 	proc _normalizeOS {os} {
 		set os [string tolower [string trim $os]]
 
@@ -229,10 +233,18 @@ namespace eval ::appfs {
 			return -code error "Unable to fetch $url"
 		}
 
-		set indexhash [lindex [split $indexhash_data ","] 0]
+		set indexhash_data [split $indexhash_data ","]
+		set indexhash [lindex $indexhash_data 0]
+		set indexhashmethod [lindex $indexhash_data 1]
+		set indexhashcert   [lindex $indexhash_data 2]
+		set indexhashsig    [lindex $indexhash_data 3]
 
 		if {![_isHash $indexhash]} {
 			return -code error "Invalid hash: $indexhash"
+		}
+
+		if {![_verifySignatureAndCertificate $indexhashcert $indexhashsig]} {
+			return -code error "Invalid signature or certificate from $hostname"
 		}
 
 		set file [download $hostname $indexhash]
