@@ -8,17 +8,32 @@ require=()
 
 function configure() {
 	configure_gcc
-	cat Makefile-libbz2_so | sed "s|CC=gcc|CC=gcc ${CFLAGS} ${LDFLAGS}|g" > Makefile-libbz2_so.new
-	cat Makefile | sed "s|LDFLAGS=|LDFLAGS=${LDFLAGS}|g" | sed "s|CFLAGS=|CFLAGS=${CFLAGS} |g" | sed "s|PREFIX=/usr/local|PREFIX=${destdir}/${prefix}|g" > Makefile.new
+	cat Makefile-libbz2_so | sed "s|CC=gcc|CC=${CC} ${CFLAGS} ${LDFLAGS}|g" > Makefile-libbz2_so.new
+	cat Makefile | sed "s|LDFLAGS=|LDFLAGS=${LDFLAGS}|g" | sed "s|CFLAGS=|CFLAGS=${CFLAGS} |g" > Makefile.new
 	mv -f Makefile-libbz2_so.new Makefile-libbz2_so
 	mv -f Makefile.new Makefile
 }
 
 function build() {
-	make -f Makefile-libbz2_so
+	make -f Makefile-libbz2_so PREFIX="${prefix}"
 }
 
 function install() {
-	make install
+	make install PREFIX="${destdir}/${prefix}"
 	mv libbz2*.so* ${destdir}/${prefix}/lib
+	(
+		cd "${destdir}/${prefix}/bin" || exit 1
+		rm -f bzcmp bzegrep bzfgrep bzless
+		ln -s bzdiff bzcmp
+		ln -s bzgrep bzegrep
+		ln -s bzgrep bzfgrep
+		ln -s bzmore bzless
+	) || return 1
+
+	(
+		cd "${destdir}/${prefix}/lib" || exit 1
+		rm -f bzcmp bzegrep bzfgrep bzless
+		ln -s libbz2.so.1.0 libbz2.so.1
+		ln -s libbz2.so.1 libbz2.so
+	) || return 1
 }
