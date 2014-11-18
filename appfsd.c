@@ -2005,13 +2005,19 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 					}
 
 					if (strcmp(optstr, "nothreads") == 0) {
+						APPFS_DEBUG("Passing option to FUSE: -s");
+
 						fuse_opt_parse(args, NULL, NULL, NULL);
 						fuse_opt_add_arg(args, "-s");
 
 						appfs_threaded_tcl = 0;
 					} else if (strcmp(optstr, "allow_other") == 0) {
+						APPFS_DEBUG("Passing option to FUSE: -o allow_Other");
+
 						fuse_opt_parse(args, NULL, NULL, NULL);
 						fuse_opt_add_arg(args, "-oallow_other");
+					} else if (strcmp(optstr, "rw") == 0) {
+						/* Ignored */
 					} else {
 						fprintf(stderr, "appfsd: invalid option: \"-o %s\"\n", optstr);
 
