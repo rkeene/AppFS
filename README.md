@@ -15,7 +15,9 @@ Paths
 
     /opt/appfs/hostname
     	Fetches: http://hostname/appfs/index
-    	Contains CSV file: hash,extraData
+    	Contains CSV file: hash,hashMethod,<certificateInDERFormatInHex>,<PKCS#1v1.5-signature-inDERFormatInHex>
+	                   \-------------/
+                                  ^- Signed data
     	Fetches: http://hostname/appfs/sha1/<hash>
     	Contains CSV file: package,version,os,cpuArch,sha1,isLatest
 
