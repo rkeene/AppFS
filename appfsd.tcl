@@ -47,6 +47,7 @@ namespace eval ::appfs {
 	variable ttl 3600
 	variable nttl 60
 	variable trusted_cas [list]
+	variable platform [::platform::generic]
 
 	proc _hash_sep {hash {seps 4}} {
 		for {set idx 0} {$idx < $seps} {incr idx} {
@@ -143,7 +144,7 @@ namespace eval ::appfs {
 		return true
 	}
 
-	proc _normalizeOS {os} {
+	proc _normalizeOS {os {tolerant 0}} {
 		set os [string tolower [string trim $os]]
 
 		switch -- $os {
@@ -158,10 +159,14 @@ namespace eval ::appfs {
 			}
 		}
 
+		if {$tolerant} {
+			return $os
+		}
+
 		return -code error "Unable to normalize OS: $os"
 	}
 
-	proc _normalizeCPU {cpu} {
+	proc _normalizeCPU {cpu {tolerant 0}} {
 		set cpu [string tolower [string trim $cpu]]
 
 		switch -glob -- $cpu {
@@ -174,6 +179,10 @@ namespace eval ::appfs {
 			"noarch" - "none" - "any" - "all" {
 				return "noarch"
 			}
+		}
+
+		if {$tolerant} {
+			return $cpu
 		}
 
 		return -code error "Unable to normalize CPU: $cpu"
@@ -528,8 +537,8 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 						set os_cpu [lindex $path 2]
 						set os_cpu [split $os_cpu "-"]
 
-						set retval(os) [lindex $os_cpu 0]
-						set retval(cpu) [lindex $os_cpu 1]
+						set retval(os) [_normalizeOS [lindex $os_cpu 0] 1]
+						set retval(cpu) [_normalizeCPU [lindex $os_cpu 1] 1]
 						set retval(_children) versions
 						set retval(_type) os-cpu
 
@@ -674,8 +683,17 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			}
 			"os-cpu" {
 				if {$pathinfo(os) == "platform" && $pathinfo(cpu) == ""} {
+					set check [::appfs::db eval {
+						SELECT DISTINCT os, cpuArch FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package);
+					}]
+
 					set retval(type) symlink
-					set retval(source) [platform::generic]
+
+					if {$check == [list "noarch" "noarch"]} {
+						set retval(source) "noarch-noarch"
+					} else {
+						set retval(source) $::appfs::platform
+					}
 				} else {
 					set check [::appfs::db onecolumn {
 						SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname) AND package = $pathinfo(package) AND os = $pathinfo(os) AND cpuArch = $pathinfo(cpu);
