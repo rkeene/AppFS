@@ -1,0 +1,24 @@
+#! /usr/bin/env bash
+
+version=1.0.6
+url="http://www.bzip.org/${version}/bzip2-${version}.tar.gz"
+sha256="a2848f34fcd5d6cf47def00461fcb528a0484d8edef8208d6d2e2909dc61d9cd"
+domain='core.appfs.rkeene.org'
+require=()
+
+function configure() {
+	configure_gcc
+	cat Makefile-libbz2_so | sed "s|CC=gcc|CC=gcc ${CFLAGS} ${LDFLAGS}|g" > Makefile-libbz2_so.new
+	cat Makefile | sed "s|LDFLAGS=|LDFLAGS=${LDFLAGS}|g" | sed "s|CFLAGS=|CFLAGS=${CFLAGS} |g" | sed "s|PREFIX=/usr/local|PREFIX=${destdir}/${prefix}|g" > Makefile.new
+	mv -f Makefile-libbz2_so.new Makefile-libbz2_so
+	mv -f Makefile.new Makefile
+}
+
+function build() {
+	make -f Makefile-libbz2_so
+}
+
+function install() {
+	make install
+	mv libbz2*.so* ${destdir}/${prefix}/lib
+}
