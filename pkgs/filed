@@ -3,6 +3,7 @@
 version='1.12'
 url="http://filed.rkeene.org/fossil/tarball/filed-${version}.tar.gz?uuid=${version}"
 sha256='807931f6c8ab4c90e26f5221e89558a84b31d4b4ce60c8c2cccb09350e25de85'
+domain='rkeene.org'
 
 function configure() {
 	configure_gcc
