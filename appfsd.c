@@ -65,6 +65,7 @@ static pthread_key_t interpKey;
 const char *appfs_cachedir;
 time_t appfs_boottime;
 int appfs_fuse_started = 0;
+int appfs_threaded_tcl;
 
 /*
  * Global variables for AppFS caching
@@ -81,7 +82,6 @@ pthread_mutex_t appfs_tcl_big_global_lock = PTHREAD_MUTEX_INITIALIZER;
 #define appfs_call_libtcl_enter pthread_mutex_lock(&appfs_tcl_big_global_lock);
 #define appfs_call_libtcl_exit pthread_mutex_unlock(&appfs_tcl_big_global_lock);
 #else
-#warning Using a Threaded Tcl interpreter may cause memory leaks
 #define appfs_call_libtcl_enter /**/
 #define appfs_call_libtcl_exit /**/
 #endif
@@ -969,7 +969,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				pathinfo->time = attr_value_wide;
 			}
 		} else {
-			pathinfo->time = 0;
+			pathinfo->time = appfs_boottime;
 		}
 
 		Tcl_Release(interp);
@@ -1870,6 +1870,7 @@ static void appfs_hot_restart(void) {
 	APPFS_DEBUG("Asked to initiate hot restart");
 
 	appfs_tcl_ResetInterps();
+
 	appfs_get_path_info_cache_flush(-1, -1);
 
 	return;
@@ -1915,10 +1916,146 @@ static void appfs_terminate_interp_and_thread(void *_interp) {
 		Tcl_DeleteInterp(interp);
 	)
 
-	Tcl_FinalizeThread();
+	appfs_call_libtcl(
+		Tcl_FinalizeThread();
+	)
 
 	return;
 }
+
+/*
+ * Command-line parsing tools
+ */
+static void appfs_print_help(FILE *channel) {
+	fprintf(channel, "Usage: {appfsd|mount.appfs} [-o <option>] [-dfsh] <cachedir> <mountpoint>\n");
+	fprintf(channel, "\n");
+	fprintf(channel, "Options:\n");
+	fprintf(channel, "  -d              Enable FUSE debug mode.\n");
+	fprintf(channel, "  -f              Run in foreground.\n");
+	fprintf(channel, "  -s              Enable single threaded mode.\n");
+	fprintf(channel, "  -h              Give this help.\n");
+	fprintf(channel, "  -o nothreads    Enable single threaded mode.\n");
+	fprintf(channel, "  -o allow_other  Allow other users to access this mountpoint (default\n");
+	fprintf(channel, "                  if root).\n");
+
+	return;
+}
+
+static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
+	int ch;
+	char *optstr, *optstr_next, *optstr_s;
+	char fake_arg[3] = {'-', 0, 0};
+
+	/*
+	 * Default values
+	 */
+#ifdef TCL_THREADS
+	appfs_threaded_tcl = 1;
+#else
+	appfs_threaded_tcl = 0;
+#endif
+
+	/**
+	 ** Add FUSE arguments which we always supply
+	 **/
+	fuse_opt_add_arg(args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,big_writes,intr,hard_remove");
+
+	if (getuid() == 0) {
+		fuse_opt_parse(args, NULL, NULL, NULL);
+		fuse_opt_add_arg(args, "-oallow_other");
+	}
+
+	while ((ch = getopt(argc, argv, "dfsho:")) != -1) {
+		switch (ch) {
+			case 'o':
+				optstr_next = optstr = optstr_s = strdup(optarg);
+
+				while (1) {
+					optstr = optstr_next;
+
+					if (!optstr) {
+						break;
+					}
+
+					optstr_next = strchr(optstr, ',');
+					if (optstr_next) {
+						*optstr_next = '\0';
+						optstr_next++;
+					}
+
+					if (strcmp(optstr, "nothreads") == 0) {
+						fuse_opt_parse(args, NULL, NULL, NULL);
+						fuse_opt_add_arg(args, "-s");
+
+						appfs_threaded_tcl = 0;
+					} else if (strcmp(optstr, "allow_other") == 0) {
+						fuse_opt_parse(args, NULL, NULL, NULL);
+						fuse_opt_add_arg(args, "-oallow_other");
+					} else {
+						fprintf(stderr, "appfsd: invalid option: \"-o %s\"\n", optstr);
+
+						free(optstr_s);
+
+						return(1);
+					}
+				}
+
+				free(optstr_s);
+
+				break;
+			case 'd':
+			case 'f':
+			case 's':
+				if (ch == 's') {
+					appfs_threaded_tcl = 0;
+				}
+
+				fake_arg[1] = ch;
+
+				APPFS_DEBUG("Passing option to FUSE: %s", fake_arg);
+
+				fuse_opt_parse(args, NULL, NULL, NULL);
+				fuse_opt_add_arg(args, fake_arg);
+				break;
+			case 'h':
+				appfs_print_help(stdout);
+
+				return(0);
+			case ':':
+			case '?':
+			default:
+				appfs_print_help(stderr);
+
+				return(1);
+		}
+	}
+
+	if ((optind + 2) != argc) {
+		if ((optind + 2) < argc) {
+			fprintf(stderr, "Too many arguments\n");
+		} else {
+			fprintf(stderr, "Missing cachedir or mountpoint\n");
+		}
+
+		appfs_print_help(stderr);
+
+		return(1);
+	}
+
+	/*
+	 * Set cache dir as first argument (the "device", essentially)
+	 */
+	appfs_cachedir = argv[optind];
+
+	/*
+	 * Pass the remaining argument to FUSE as the directory
+	 */
+	fuse_opt_parse(args, NULL, NULL, NULL);
+	fuse_opt_add_arg(args, argv[optind + 1]);
+
+	return(0);
+}
+
 
 /*
  * FUSE operations structure
@@ -1942,31 +2079,15 @@ static struct fuse_operations appfs_operations = {
 };
 
 /*
- * FUSE option parsing callback
- */
-static int appfs_fuse_opt_cb(void *data, const char *arg, int key, struct fuse_args *outargs) {
-	static int seen_cachedir = 0;
-
-	if (key == FUSE_OPT_KEY_NONOPT && seen_cachedir == 0) {
-		seen_cachedir = 1;
-
-		appfs_cachedir = strdup(arg);
-
-		return(0);
-	}
-
-	return(1);
-}
-
-/*
  * Entry point into this program.
  */
 int main(int argc, char **argv) {
 	Tcl_Interp *test_interp;
 	char *test_interp_error;
-	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-	int pthread_ret;
+	struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
+	int pthread_ret, aop_ret;
 	void *signal_ret;
+	char *argv0;
 
 	/*
 	 * Skip passed program name
@@ -1974,6 +2095,9 @@ int main(int argc, char **argv) {
 	if (argc == 0 || argv == NULL) {
 		return(1);
 	}
+
+	argv0 = argv[0];
+
 	argc--;
 	argv++;
 
@@ -2038,6 +2162,34 @@ int main(int argc, char **argv) {
 	}
 
 	/*
+	 * Register a signal handler for hot-restart requests
+	 */
+	signal_ret = signal(SIGHUP, appfs_signal_handler);
+	if (signal_ret == SIG_ERR) {
+		fprintf(stderr, "Unable to install signal handler for hot-restart\n");
+		fprintf(stderr, "Hot-restart will not be available.\n");
+	}
+
+	/*
+	 * Parse command line arguments
+	 */
+	/**
+	 ** Restore argc/argv to original values, replacing argv[0] in case
+	 ** it was moified by --cachedir option.
+	 **/
+	argc++;
+	argv--;
+	argv[0] = argv0;
+
+	/**
+	 ** Perform the argument parsing
+	 **/
+	aop_ret = appfs_opt_parse(argc, argv, &args);
+	if (aop_ret != 0) {
+		return(aop_ret);
+	}
+
+	/*
 	 * Create a Tcl interpreter just to verify that things are in working 
 	 * order before we become a daemon.
 	 */
@@ -2055,26 +2207,8 @@ int main(int argc, char **argv) {
 
 	Tcl_DeleteInterp(test_interp);
 
-	Tcl_FinalizeNotifier(NULL);
-
-	/*
-	 * Register a signal handler for hot-restart requests
-	 */
-	signal_ret = signal(SIGHUP, appfs_signal_handler);
-	if (signal_ret == SIG_ERR) {
-		fprintf(stderr, "Unable to install signal handler for hot-restart\n");
-		fprintf(stderr, "Hot-restart will not be available.\n");
-	}
-
-	/*
-	 * Add FUSE arguments which we always supply
-	 */
-	fuse_opt_parse(&args, NULL, NULL, appfs_fuse_opt_cb);
-	fuse_opt_add_arg(&args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,big_writes,intr,hard_remove");
-
-	if (getuid() == 0) {
-		fuse_opt_parse(&args, NULL, NULL, NULL);
-		fuse_opt_add_arg(&args, "-oallow_other");
+	if (appfs_threaded_tcl) {
+		Tcl_FinalizeNotifier(NULL);
 	}
 
 	/*
@@ -2084,4 +2218,3 @@ int main(int argc, char **argv) {
 	appfs_fuse_started = 1;
 	return(fuse_main(args.argc, args.argv, &appfs_operations, NULL));
 }
- 
