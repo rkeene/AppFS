@@ -36,8 +36,16 @@ else
 	pkgsdir="$1"
 fi
 appfsdir="$2"
+sitekey="$3"
+sitecert="$4"
 
-shift; shift
+if [ -n "${sitekey}" ]; then
+	sitekey="$(readlink -f "${sitekey}")"
+fi
+
+if [ -n "${sitecert}" ]; then
+	sitecert="$(readlink -f "${sitecert}")"
+fi
 
 if [ -z "${pkgsdir}" -a -z "${pkgfile}" ] || [ -z "${appfsdir}" ]; then
 	echo 'Usage: appfs-mk {--cpio <pkgfile>|<pkgsdir>} <appfsdir> [<site-key> [<site-certificate>]]' >&2
@@ -249,7 +257,7 @@ fi
 echo "${packagelistfile_hash},sha1" > "${indexfile}"
 
 if [ -x "$(which 'appfs-cert' 2>/dev/null)" ]; then
-	appfs-cert sign-site "${indexfile}" "$@"
+	appfs-cert sign-site "${indexfile}" "${sitekey}" "${sitecert}"
 fi
 
 if [ -z "$APPFS_SIGN_IN_PLACE" ]; then
