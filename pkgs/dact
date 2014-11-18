@@ -1,0 +1,21 @@
+#! /usr/bin/env bash
+
+version='0.8.42'
+url="http://www.rkeene.org/devel/dact-${version}.tar.gz"
+sha256='08c91d36b2de30c4f2e9e13a7b044c137c096db2ba8d868d1962e209dd6b2ed8'
+domain='rkeene.org'
+require=(zlib@core.appfs.rkeene.org bzip2@core.appfs.rkeene.org)
+
+function preconfigure() {
+	sed -i -r 's/^(prefix|libdir|sysconfdir) *= */&$(DESTDIR)/g' Makefile.in
+	sed -i '/^ALGO *=/ a \
+MODS = $(ALGO:.c=.so)' Makefile.in
+}
+
+function postinstall() {
+	# Delete incomplete "libdact"
+	rm -f "${destdir}/${prefix}"/lib/libdact*
+	rmdir "${destdir}/${prefix}/lib" >/dev/null 2>/dev/null
+
+	return 0
+}
