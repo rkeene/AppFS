@@ -59,6 +59,7 @@ install: appfsd appfs-cache appfs-mkfs
 	cp appfs-cache '$(DESTDIR)$(sbindir)/'
 	cp appfs-mkfs '$(DESTDIR)$(bindir)/'
 
+# Internal target to publish appfs application to AppFS
 appfs-$(APPFS_VERSION).cpio: appfs-cache appfs-cert appfs-mkfs
 	rm -rf __TMP__
 	mkdir -p __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin
@@ -75,6 +76,7 @@ clean:
 	rm -f pki.tcl.new pki.tcl.h
 
 distclean: clean
+	rm -f appfs-$(APPFS_VERSION).cpio
 
 mrproper: distclean
 	rm -f pki.tcl
