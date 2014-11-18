@@ -64,6 +64,7 @@ appfs-$(APPFS_VERSION).cpio: appfs-cache appfs-cert appfs-mkfs
 	rm -rf __TMP__
 	mkdir -p __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin
 	cp appfs-cache appfs-cert appfs-mkfs __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin
+	fossil cat -r packages build > __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin/appfs-build
 	chmod 755 __TMP__/appfs/noarch-noarch/$(APPFS_VERSION)/bin/*
 	( cd __TMP__ && find appfs/noarch-noarch/$(APPFS_VERSION) | cpio --owner 0:0 -H newc -o ) > appfs-$(APPFS_VERSION).cpio.new
 	rm -rf __TMP__
