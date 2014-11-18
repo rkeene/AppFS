@@ -1,17 +1,17 @@
-APPFS_VERSION = 0.1
-CC = gcc
-PKG_CONFIG = pkg-config
-FUSE_CFLAGS = $(shell $(PKG_CONFIG) --cflags fuse)
-CFLAGS_DEBUG = -Wall -g3 -ggdb3 -DDEBUG=1 -UNDEBUG -O0 -DAPPFS_EXIT_PATH=1
+APPFS_VERSION  = 0.1
+CC             = gcc
+PKG_CONFIG     = pkg-config
+FUSE_CFLAGS    = $(shell $(PKG_CONFIG) --cflags fuse)
+CFLAGS_DEBUG   = -Wall -g3 -ggdb3 -DDEBUG=1 -UNDEBUG -O0 -DAPPFS_EXIT_PATH=1
 CFLAGS_RELEASE = -Wall -UDEBUG -DNDEBUG=1 -O3
-CFLAGS = $(FUSE_CFLAGS) $(TCL_CFLAGS) $(CFLAGS_RELEASE)
-LDFLAGS = $(TCL_LDFLAGS)
-FUSE_LIBS = $(shell $(PKG_CONFIG) --libs fuse)
-LIBS = $(FUSE_LIBS) $(TCL_LIBS)
-PREFIX = /usr/local
-prefix = $(PREFIX)
-bindir = $(prefix)/bin
-sbindir = $(prefix)/sbin
+CFLAGS         += $(FUSE_CFLAGS) $(TCL_CFLAGS) $(CFLAGS_DEBUG)
+LDFLAGS        += $(TCL_LDFLAGS)
+FUSE_LIBS      = $(shell $(PKG_CONFIG) --libs fuse)
+LIBS           += $(FUSE_LIBS) $(TCL_LIBS)
+PREFIX         = /usr/local
+prefix         = $(PREFIX)
+bindir         = $(prefix)/bin
+sbindir        = $(prefix)/sbin
 
 ifneq ($(TCLKIT_SDK_DIR),)
 TCLCONFIG_SH_PATH = $(TCLKIT_SDK_DIR)/lib/tclConfig.sh
