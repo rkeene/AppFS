@@ -5,3 +5,11 @@ url="https://www.ffmpeg.org/releases/ffmpeg-${version}.tar.bz2"
 domain=rkeene.org
 sha256='ca5c3e3c0e4f9e43b9dceafceb866acb1ea575cb9f2d94e0d959303e4fc4e602'
 require=(zlib@core.appfs.rkeene.org readline@core.appfs.rkeene.org)
+make_extra=(-j10)
+
+function configure() {
+	configure_gcc
+	CC="$(echo "${CC}" | sed 's@ -nostdinc @ @g')"
+	./configure --prefix="${prefix}" --cc="${CC} ${CPPFLAGS}" --extra-cflags="${CFLAGS}" --host-cppflags="${CPPFLAGS}" --extra-ldflags="${LDFLAGS}" --enable-shared --enable-pic --enable-rpath --enable-x11grab --enable-gpl || return 1
+	echo '# Ignore: DESTDIR' >> Makefile
+}
