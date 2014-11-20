@@ -178,6 +178,8 @@ function verifyRequiredPackages() {
 						;;
 				esac
 			done
+
+			break
 		done
 
 		if [ "${pkgfound}" = '0' ]; then
@@ -239,9 +241,11 @@ function configure_gcc() {
 	gcc_default_headers="$(echo '' | ${CPP:-cpp} -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-isystem @' | tr $'\n' ' ')"
 
 	CC="${CC:-gcc} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
+	CXX="${CXX:-g++} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
 
 	if ! echo " ${require[*]} " | grep ' linux-headers[/@: ]' >/dev/null; then
 		CC="${CC} -isystem ${linuxheadersdir}/include"
+		CXX="${CXX} -isystem ${linuxheadersdir}/include"
 	fi
 
 	BUILD_CC="${CC}"
@@ -273,7 +277,7 @@ function postbuild() {
 function build() {
 	grep "DESTDIR" Makefile >/dev/null || die "Don't know how to build this software"
 
-	make
+	make "${make_extra[@]}"
 }
 
 function preinstall() {
