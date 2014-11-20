@@ -1,0 +1,7 @@
+#! /usr/bin/env bash
+
+version='2.4.3'
+url="https://www.ffmpeg.org/releases/ffmpeg-${version}.tar.bz2"
+domain=rkeene.org
+sha256='ca5c3e3c0e4f9e43b9dceafceb866acb1ea575cb9f2d94e0d959303e4fc4e602'
+require=(zlib@core.appfs.rkeene.org readline@core.appfs.rkeene.org)
