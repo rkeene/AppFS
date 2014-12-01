@@ -671,7 +671,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 				set check [::appfs::db onecolumn {SELECT 1 FROM packages WHERE hostname = $pathinfo(hostname);}]
 				if {$check == "1"} {
 					set retval(type) directory
-					set retval(childcount) [llength [getchildren $path]]
+					set retval(childcount) 0
 				}
 			}
 			"packages" {
