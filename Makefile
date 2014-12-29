@@ -1,4 +1,4 @@
-APPFS_VERSION  = 1.2
+APPFS_VERSION  = 1.3
 CC             = gcc
 PKG_CONFIG     = pkg-config
 FUSE_CFLAGS    = $(shell $(PKG_CONFIG) --cflags fuse)
