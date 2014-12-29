@@ -1986,8 +1986,11 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 		fuse_opt_add_arg(args, "-oallow_other");
 	}
 
-	while ((ch = getopt(argc, argv, "dfsho:")) != -1) {
+	while ((ch = getopt(argc, argv, "dfshvo:")) != -1) {
 		switch (ch) {
+			case 'v':
+				/* Ignored */
+				break;
 			case 'o':
 				optstr_next = optstr = optstr_s = strdup(optarg);
 
@@ -2047,7 +2050,7 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 			case 'h':
 				appfs_print_help(stdout);
 
-				return(0);
+				return(-1);
 			case ':':
 			case '?':
 			default:
@@ -2213,6 +2216,10 @@ int main(int argc, char **argv) {
 	 **/
 	aop_ret = appfs_opt_parse(argc, argv, &args);
 	if (aop_ret != 0) {
+		if (aop_ret < 0) {
+			return(0);
+		}
+
 		return(aop_ret);
 	}
 
