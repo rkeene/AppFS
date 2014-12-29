@@ -1,0 +1,92 @@
+.TH APPFSD 8 "29 DEC 2014" "AppFS @@VERS@@"
+.SH NAME
+appfsd, mount.appfs - AppFS FUSE Daemon
+
+.SH SYNOPSIS
+.BI "appfsd [\-dfsh] [\-o " option "[," ... "]] " cachedir " " mount_point
+.br
+.BI "mount.appfs [\-dfsh] [\-o " option "[," ... "]] " cachedir " " mount_point
+
+.SH DESCRIPTION
+AppFS is a FUSE-based filesystem to present a manifest-based package format
+from remote servers to the local system.  It works over HTTP (by default,
+at least).  Remote sites are identified at the top-level of the mounted
+directory and all sites are verified by PKI signature.
+
+AppFS is started with the \fBappfsd\fR daemon, which may also be named
+\fBmount.appfs\fR.
+
+.SH OPTIONS
+.TP 
+.BR \-d
+Enable FUSE debug mode. 
+
+.TP
+.B \-f
+Run AppFS daemon in the foreground.
+
+.TP
+.B \-s
+Enable single threaded mode.  This will significantly reduce performance and
+responsiveness.
+
+.TP
+.B \-h
+Request usage help.
+
+.TP
+.B "\-o nothreads"
+Enable single threaded mode.  This will significantly reduce performance and
+responsiveness.
+This is the same as the "\fB-s\fR" option, provided for use in an
+\fI/etc/fstab\fR option.
+
+.TP
+.B "\-o allow_other"
+Allow other users to access this mountpoint (this is the default if the user
+running \fBappfsd\fR is root).
+
+.TP
+.I cachedir
+Path to a directory to store cache database and read configuration file from.
+A suggested value for this for a system-wide \fBappfsd\fR is
+\fI/var/cache/appfs\fR.
+
+.TP
+.I mount_point
+Path to mount AppFS onto in the filesystem.  This should almost always be
+\fI/opt/appfs\fR.
+
+.SH FILES
+.TP
+.IB cachedir /config
+Configuration file for this instance of AppFS.  This should be a valid
+.BR Tcl (n)
+script.  The configuration file can be modified at run-time and \fBappfsd\fR
+reloaded by sending it a \fBSIGHUP\fR.
+
+.TP
+.IB cachedir /cache.db
+SQLite3 database used for maintaining metadata for the cache directory.
+
+.SH EXAMPLES
+The most recommended method of running AppFS (directly):
+.PP
+.nf
+.RS
+# mkdir /opt/appfs
+# appfsd /var/cache/appfs /opt/appfs
+.RE
+.fi
+
+Create an \fI/etc/fstab\fR entry:
+.PP
+.nf
+.RS
+/var/cache/appfs /opt/appfs       appfs       defaults         0   0
+.RE
+.fi
+
+.SH SEE ALSO
+.BR Tcl (n) ,
+.BR sqlite3 (1)

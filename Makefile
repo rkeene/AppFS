@@ -10,8 +10,10 @@ FUSE_LIBS      = $(shell $(PKG_CONFIG) --libs fuse)
 LIBS           += $(FUSE_LIBS) $(TCL_LIBS)
 PREFIX         = /usr/local
 prefix         = $(PREFIX)
-bindir         = $(prefix)/bin
-sbindir        = $(prefix)/sbin
+exec_prefix    = $(prefix)
+bindir         = $(exec_prefix)/bin
+sbindir        = $(exec_prefix)/sbin
+mandir         = $(prefix)/share/man
 
 ifneq ($(TCLKIT_SDK_DIR),)
 TCLCONFIG_SH_PATH = $(TCLKIT_SDK_DIR)/lib/tclConfig.sh
@@ -52,12 +54,15 @@ pki.tcl:
 	sed 's@[\\"]@\\&@g;s@^@   "@;s@$$@\\n"@' $^ > $@.new
 	mv $@.new $@
 
-install: appfsd appfs-cache appfs-mkfs
-	if [ ! -d '$(DESTDIR)$(sbindir)' ]; then mkdir -p '$(DESTDIR)$(sbindir)'; chmod 755 '$(DESTDIR)$(sbindir)'; fi
-	if [ ! -d '$(DESTDIR)$(bindir)' ]; then mkdir -p '$(DESTDIR)$(bindir)'; chmod 755 '$(DESTDIR)$(bindir)'; fi
+install: appfsd appfs-cache appfs-mkfs appfsd.8
+	if [ ! -d '$(DESTDIR)$(sbindir)' ]; then mkdir -p '$(DESTDIR)$(sbindir)' && chmod 755 '$(DESTDIR)$(sbindir)'; fi
+	if [ ! -d '$(DESTDIR)$(bindir)' ]; then mkdir -p '$(DESTDIR)$(bindir)' && chmod 755 '$(DESTDIR)$(bindir)'; fi
+	if [ ! -d '$(DESTDIR)$(mandir)' ]; then mkdir -p '$(DESTDIR)$(mandir)' && chmod 755 '$(DESTDIR)$(mandir)'; fi
 	cp appfsd '$(DESTDIR)$(sbindir)/'
+	ln -s appfsd '$(DESTDIR)$(sbindir)/mount.appfs'
 	cp appfs-cache '$(DESTDIR)$(sbindir)/'
 	cp appfs-mkfs '$(DESTDIR)$(bindir)/'
+	cp appfsd.8 '$(DESTDIR)$(mandir)/'
 
 # Internal target to publish appfs application to AppFS
 appfs-$(APPFS_VERSION).cpio: appfs-cache appfs-cert appfs-mkfs
