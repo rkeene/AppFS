@@ -1,0 +1,66 @@
+#! /usr/bin/env bash
+
+version="$1"
+version_release='1'
+platform="$(uname -m)"
+url="http://rkeene.org/devel/appfs/appfs-${version}.tar.gz"
+make_args=(
+	prefix=/usr
+	mandir=/usr/man
+)
+
+if [ -z "${version}" ]; then
+	echo 'Usage: make-slackware-package <version>' >&2
+
+	exit 1
+fi
+
+workdir="${TMPDIR:-/tmp}/appfs-slackware-package-${version}-$$${RANDOM}${RANDOM}${RANDOM}"
+package="appfs-${version}-${platform}-${version_release}.txz"
+mkdir "${workdir}" || exit 1
+
+(
+	PATH="${PATH}:/sbin"
+
+	set -ex
+
+	cd "${workdir}"
+
+	installdir="$(pwd)/installed"
+
+	wget -O appfs.tar.gz "${url}"
+	tar -xf appfs.tar.gz
+
+	cd "appfs-${version}"
+
+	make "${make_args[@]}"
+	make "${make_args[@]}" DESTDIR="${installdir}" install
+
+	cd "${installdir}"
+
+	mkdir install
+	cat << \_EOF_ > install/slack-desc
+appfs: appfs (App Filesystem)
+appfs:
+appfs: AppFS is a manifest-based FUSE filesystem that lazily fetches files over HTTP.
+appfs: It is intended to be a universal packaging format.
+appfs:
+appfs:
+appfs:
+appfs:
+appfs:
+appfs:
+appfs:
+_EOF_
+
+	makepkg -c n -l y "../${package}"
+
+	xz -dc "../${package}" | tardy -User 0 -Group 0 | xz -9c > "../${package}.new"
+	mv "../${package}.new" "../${package}"
+) || exit 1
+
+mv "${workdir}/${package}" .
+
+rm -rf "${workdir}"
+
+exit 0
