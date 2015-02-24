@@ -6,6 +6,7 @@ platform="$(uname -m)"
 url="http://rkeene.org/devel/appfs/appfs-${version}.tar.gz"
 make_args=(
 	prefix=/usr
+	sbindir=/sbin
 	mandir=/usr/man
 )
 
