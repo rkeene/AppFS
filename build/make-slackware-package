@@ -10,6 +10,12 @@ make_args=(
 	mandir=/usr/man
 )
 
+if [ ! -f '/etc/slackware-version' ]; then
+	echo 'This script is meant to be run on a Slackware system.' >&2
+
+	exit 1
+fi
+
 if [ -z "${version}" ]; then
 	echo 'Usage: make-slackware-package <version>' >&2
 
@@ -23,24 +29,24 @@ mkdir "${workdir}" || exit 1
 (
 	PATH="${PATH}:/sbin"
 
-	set -ex
+	set -x
 
-	cd "${workdir}"
+	cd "${workdir}" || exit 1
 
 	installdir="$(pwd)/installed"
 
 	wget -O appfs.tar.gz "${url}"
-	tar -xf appfs.tar.gz
+	tar -xf appfs.tar.gz || exit 1
 
-	cd "appfs-${version}"
+	cd "appfs-${version}" || exit 1
 
-	make "${make_args[@]}"
-	make "${make_args[@]}" DESTDIR="${installdir}" install
+	make "${make_args[@]}" || exit 1
+	make "${make_args[@]}" DESTDIR="${installdir}" install || exit 1
 
-	cd "${installdir}"
+	cd "${installdir}" || exit 1
 
-	mkdir install
-	cat << \_EOF_ > install/slack-desc
+	mkdir install || exit 1
+	cat << \_EOF_ > install/slack-desc || exit 1
 appfs: appfs (App Filesystem)
 appfs:
 appfs: AppFS is a manifest-based FUSE filesystem that lazily fetches files over HTTP.
@@ -54,10 +60,12 @@ appfs:
 appfs:
 _EOF_
 
-	makepkg -c n -l y "../${package}"
+	makepkg -c n -l y "../${package}" || exit 1
 
-	xz -dc "../${package}" | tardy -User 0 -Group 0 | xz -9c > "../${package}.new"
-	mv "../${package}.new" "../${package}"
+	if [ "$(id -u)" != '0' ]; then
+		xz -dc "../${package}" | tardy -User 0 -Group 0 | xz -9c > "../${package}.new" || exit 1
+		mv "../${package}.new" "../${package}" || exit 1
+	fi
 ) || exit 1
 
 mv "${workdir}/${package}" .
