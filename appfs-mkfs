@@ -220,22 +220,25 @@ cat "${packagelistfile}" | awk -F ',' '
 		hash = $5;
 		isLatest = $6;
 
+		latestKey = package "," os "," cpuArch;
 		key = package "," version "," os "," cpuArch;
 
 		if (isLatest == "1") {
-			keys_latest[key] = hash;
+			keys_latest[latestKey] = hash;
 		}
 		keys[key] = hash;
 	}
 
 	END{
 		for (key in keys) {
-			if (keys_latest[key] != "") {
+			hash = keys[key];
+			split(key, keyParts, /,/);
+			latestKey = keyParts[1] "," keyParts[3] "," keyParts[4];
+
+			if (keys_latest[latestKey] == hash) {
 				isLatest = "1";
-				hash = keys_latest[key];
 			} else {
 				isLatest = "0";
-				hash = keys[key];
 			}
 
 			print key "," hash "," isLatest;
