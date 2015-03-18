@@ -4,7 +4,11 @@ PKG_CONFIG     = pkg-config
 FUSE_CFLAGS    = $(shell $(PKG_CONFIG) --cflags fuse)
 CFLAGS_DEBUG   = -Wall -g3 -ggdb3 -DDEBUG=1 -UNDEBUG -O0 -DAPPFS_EXIT_PATH=1
 CFLAGS_RELEASE = -Wall -UDEBUG -DNDEBUG=1 -O3
+ifneq ($(APPFS_DEBUG_BUILD),1)
+CFLAGS         += $(FUSE_CFLAGS) $(TCL_CFLAGS) $(CFLAGS_RELEASE)
+else
 CFLAGS         += $(FUSE_CFLAGS) $(TCL_CFLAGS) $(CFLAGS_DEBUG)
+endif
 LDFLAGS        += $(TCL_LDFLAGS)
 FUSE_LIBS      = $(shell $(PKG_CONFIG) --libs fuse)
 LIBS           += $(FUSE_LIBS) $(TCL_LIBS)
