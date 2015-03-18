@@ -438,7 +438,12 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 					}
 					"file" {
 						set fileInfo(size) [lindex $work 0]
-						set fileInfo(perms) [lindex $work 1]
+
+						# We lower-case the permissions because upper-case permissions
+						# should not be set remotely as they may influence the security
+						# of the system.
+						set fileInfo(perms) [string tolower [lindex $work 1]]
+
 						set fileInfo(sha1) [lindex $work 2]
 
 						set work [lrange $work 3 end]

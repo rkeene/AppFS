@@ -143,6 +143,8 @@ struct appfs_pathinfo {
 		} dir;
 		struct {
 			int executable;
+			int suid;
+			int worldaccessible;
 			off_t size;
 		} file;
 		struct {
@@ -812,7 +814,7 @@ static void appfs_get_path_info_cache_flush(uid_t uid, int new_size) {
 static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo) {
 	Tcl_Interp *interp;
 	Tcl_Obj *attrs_dict, *attr_value;
-	const char *attr_value_str;
+	const char *attr_value_str, *attr_value_str_i;
 	Tcl_WideInt attr_value_wide;
 	int attr_value_int;
 	static __thread Tcl_Obj *attr_key_type = NULL, *attr_key_perms = NULL, *attr_key_size = NULL, *attr_key_time = NULL, *attr_key_source = NULL, *attr_key_childcount = NULL, *attr_key_packaged = NULL;
@@ -934,6 +936,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				pathinfo->type = APPFS_PATHTYPE_FILE;
 				pathinfo->typeinfo.file.size = 0;
 				pathinfo->typeinfo.file.executable = 0;
+				pathinfo->typeinfo.file.suid = 0;
+				pathinfo->typeinfo.file.worldaccessible = 0;
 
 				Tcl_DictObjGet(interp, attrs_dict, attr_key_size, &attr_value);
 				if (attr_value != NULL) {
@@ -946,8 +950,21 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				Tcl_DictObjGet(interp, attrs_dict, attr_key_perms, &attr_value);
 				if (attr_value != NULL) {
 					attr_value_str = Tcl_GetString(attr_value);
-					if (attr_value_str[0] == 'x') {
-						pathinfo->typeinfo.file.executable = 1;
+					for (attr_value_str_i = &attr_value_str[0]; *attr_value_str_i != '\0'; attr_value_str_i++) {
+						switch (*attr_value_str_i) {
+							case 'x':
+								pathinfo->typeinfo.file.executable = 1;
+
+								break;
+							case 'U':
+								pathinfo->typeinfo.file.suid = 1;
+
+								break;
+							case '-':
+								pathinfo->typeinfo.file.worldaccessible = 1;
+
+								break;
+						}
 					}
 				}
 				break;
@@ -1185,8 +1202,17 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 				stbuf->st_mode = S_IFREG | 0444;
 			}
 
+			if (pathinfo.typeinfo.file.suid) {
+				stbuf->st_mode = S_IFREG | 04000;
+			}
+
+			if (pathinfo.typeinfo.file.worldaccessible) {
+				stbuf->st_mode &= ~077;
+			}
+
 			stbuf->st_nlink = 1;
 			stbuf->st_size = pathinfo.typeinfo.file.size;
+
 			break;
 		case APPFS_PATHTYPE_SYMLINK:
 			stbuf->st_mode = S_IFLNK | 0555;
