@@ -757,9 +757,9 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 								set retval(size) $localpathinfo(size)
 								_as_user {
 									if {[file executable $localpath]} {
-										set retval(perms) "x"
+										set retval(perms) "x-"
 									} else {
-										set retval(perms) ""
+										set retval(perms) "-"
 									}
 								}
 							}
