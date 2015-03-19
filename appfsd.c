@@ -143,7 +143,7 @@ struct appfs_pathinfo {
 		} dir;
 		struct {
 			int executable;
-			int suid;
+			int suidRoot;
 			int worldaccessible;
 			off_t size;
 		} file;
@@ -936,7 +936,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 				pathinfo->type = APPFS_PATHTYPE_FILE;
 				pathinfo->typeinfo.file.size = 0;
 				pathinfo->typeinfo.file.executable = 0;
-				pathinfo->typeinfo.file.suid = 0;
+				pathinfo->typeinfo.file.suidRoot = 0;
 				pathinfo->typeinfo.file.worldaccessible = 0;
 
 				Tcl_DictObjGet(interp, attrs_dict, attr_key_size, &attr_value);
@@ -957,7 +957,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 								break;
 							case 'U':
-								pathinfo->typeinfo.file.suid = 1;
+								pathinfo->typeinfo.file.suidRoot = 1;
 
 								break;
 							case '-':
@@ -1152,6 +1152,7 @@ static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
 
 static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	struct appfs_pathinfo pathinfo;
+	int changeOwnerToUserIfPackaged;
 	int retval;
 
 	retval = 0;
@@ -1190,20 +1191,24 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	stbuf->st_ino   = pathinfo.inode;
 	stbuf->st_mode  = 0;
 
+	changeOwnerToUserIfPackaged = 1;
+
 	switch (pathinfo.type) {
 		case APPFS_PATHTYPE_DIRECTORY:
 			stbuf->st_mode = S_IFDIR | 0555;
 			stbuf->st_nlink = 2 + pathinfo.typeinfo.dir.childcount;
 			break;
 		case APPFS_PATHTYPE_FILE:
+			stbuf->st_mode = S_IFREG | 0444;
+
 			if (pathinfo.typeinfo.file.executable) {
-				stbuf->st_mode = S_IFREG | 0555;
-			} else {
-				stbuf->st_mode = S_IFREG | 0444;
+				stbuf->st_mode |= 0111;
 			}
 
-			if (pathinfo.typeinfo.file.suid) {
-				stbuf->st_mode = S_IFREG | 04000;
+			if (pathinfo.typeinfo.file.suidRoot) {
+				changeOwnerToUserIfPackaged = 0;
+
+				stbuf->st_mode |= 04000;
 			}
 
 			if (pathinfo.typeinfo.file.worldaccessible) {
@@ -1239,7 +1244,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			break;
 	}
 
-	if (pathinfo.packaged) {
+	if (pathinfo.packaged && changeOwnerToUserIfPackaged) {
 		stbuf->st_uid   = appfs_get_fsuid();
 		stbuf->st_gid   = appfs_get_fsgid();
 		stbuf->st_mode |= 0200;
@@ -2010,6 +2015,13 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 	if (getuid() == 0) {
 		fuse_opt_parse(args, NULL, NULL, NULL);
 		fuse_opt_add_arg(args, "-oallow_other");
+
+		/*
+		 * This should generally be avoided, but if there are security
+		 * concerns suid can be disabled completely on the commandline
+		 */
+		fuse_opt_parse(args, NULL, NULL, NULL);
+		fuse_opt_add_arg(args, "-osuid");
 	}
 
 	while ((ch = getopt(argc, argv, "dfshvo:")) != -1) {

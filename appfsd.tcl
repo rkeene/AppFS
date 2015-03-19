@@ -40,6 +40,15 @@ namespace eval ::appfs::user {
 	proc get_homedir {} {
 		return [::appfsd::get_homedir]
 	}
+
+	# User-replacable function to update permissions
+	proc change_perms {file perms} {
+		if {[info exists ::appfs::user::add_perms($file)]} {
+			append perms $::appfs::user::add_perms($file)
+		}
+
+		return $perms
+	}
 }
 
 namespace eval ::appfs {
@@ -755,6 +764,10 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 							"file" {
 								set retval(type) "file"
 								set retval(size) $localpathinfo(size)
+
+								# Once the user writes to a file, all its other
+								# attributes (such as suid) are lost
+
 								_as_user {
 									if {[file executable $localpath]} {
 										set retval(perms) "x-"
@@ -793,6 +806,11 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 						}
 
 						::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
+
+						# Allow an administrator to supply additional permissions to remote files
+						if {[info exists retval(perms)]} {
+							set retval(perms) [::appfs::user::change_perms $path $retval(perms)]
+						}
 
 						if {[info exists retval(type)] && $retval(type) == "directory"} {
 							set retval(childcount) [llength [getchildren $path]]
