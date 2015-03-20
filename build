@@ -120,6 +120,10 @@ function verifyRequiredPackages() {
 		esac
 
 		case "${pkg}" in
+			@*)
+				# Fake package
+				continue
+				;;
 			*/*@*)
 				pkgdomain="$(echo "${pkg}" | cut -f 2 -d '@')"
 				pkgversion="$(echo "${pkg}" | cut -f 2 -d '/' | cut -f 1 -d '@')"
@@ -225,6 +229,7 @@ function configure_gcc() {
 	local glibcdir linuxheadersdir
 	local dynlinker
 	local gcc_default_headers
+	local pkg use_native_platform
 
 	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/platform/latest"
 	glibcdir="$(readlink -f "${glibcdir}")"
@@ -238,14 +243,28 @@ function configure_gcc() {
 		die 'glibc directory is not available (appfs running/working?)'
 	fi
 
-	gcc_default_headers="$(echo '' | ${CPP:-cpp} -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-isystem @' | tr $'\n' ' ')"
+	use_native_platform='0'
+	for pkg in "${require[@]}"; do
+		case "${pkg}" in
+			@native-os)
+				use_native_platform='1'
+				;;
+		esac
+	done
 
-	CC="${CC:-gcc} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
-	CXX="${CXX:-g++} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
+	if [ "${use_native_platform}" = '0' ]; then
+		gcc_default_headers="$(echo '' | ${CPP:-cpp} -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-isystem @' | tr $'\n' ' ')"
 
-	if ! echo " ${require[*]} " | grep ' linux-headers[/@: ]' >/dev/null; then
-		CC="${CC} -isystem ${linuxheadersdir}/include"
-		CXX="${CXX} -isystem ${linuxheadersdir}/include"
+		CC="${CC:-gcc} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
+		CXX="${CXX:-g++} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
+
+		if ! echo " ${require[*]} " | grep ' linux-headers[/@: ]' >/dev/null; then
+			CC="${CC} -isystem ${linuxheadersdir}/include"
+			CXX="${CXX} -isystem ${linuxheadersdir}/include"
+		fi
+	else
+		CC="${CC:-gcc} -isystem ${glibcdir}/include"
+		CXX="${CXX:-g++} -isystem ${glibcdir}/include"
 	fi
 
 	BUILD_CC="${CC}"
@@ -346,7 +365,7 @@ fi
 
 archivedir="$(pwd)/ARCHIVE"
 workdir="workdir-$$${RANDOM}${RANDOM}${RANDOM}"
-pkgarchive="${archivedir}/${pkg}-${version}"
+pkgarchive="${archivedir}/${pkg}-${version}.archive"
 mkdir "${archivedir}" >/dev/null 2>/dev/null
 mkdir "${workdir}" || exit 1
 cd "${workdir}" || exit 1
