@@ -2170,6 +2170,11 @@ int main(int argc, char **argv) {
 	argv++;
 
 	/*
+	 * Set appropriate umask
+	 */
+	umask(022);
+
+	/*
 	 * Set global variables, these should be configuration options.
 	 */
 	appfs_cachedir = APPFS_CACHEDIR;
