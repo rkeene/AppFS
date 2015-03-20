@@ -1,0 +1,25 @@
+#! /usr/bin/env bash
+
+version='1.32'
+url="https://www.fossil-scm.org/download/fossil-src-${version}.tar.gz"
+sha256='cd79c333eb9e86fbb8c17bf5cdf31c387e4ab768eede623aed21adfdbcad686e'
+require=(zlib@core.appfs.rkeene.org)
+
+function configure() {
+	configure_gcc
+
+	CCACHE=none
+	export CCACHE
+
+	./configure "${configure_extra[@]}"
+}
+
+function build() {
+	make
+}
+
+function install() {
+	mkdir -p "${destdir}/${prefix}/bin"
+	cp fossil "${destdir}/${prefix}/bin/"
+	chmod 755 "${destdir}/${prefix}/bin/fossil"
+}
