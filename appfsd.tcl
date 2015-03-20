@@ -809,6 +809,10 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 
 						# Allow an administrator to supply additional permissions to remote files
 						if {[info exists retval(perms)]} {
+							# Lower case this in case an upper-cased value was put in
+							# the database before we started lowercasing them
+							set retval(perms) [string tolower $retval(perms)]
+
 							set retval(perms) [::appfs::user::change_perms $path $retval(perms)]
 						}
 
