@@ -42,9 +42,13 @@ namespace eval ::appfs::user {
 	}
 
 	# User-replacable function to update permissions
-	proc change_perms {file perms} {
+	proc change_perms {file sha1 perms} {
 		if {[info exists ::appfs::user::add_perms($file)]} {
 			append perms $::appfs::user::add_perms($file)
+		}
+
+		if {[info exists ::appfs::user::add_perms($sha1)]} {
+			append perms $::appfs::user::add_perms($sha1)
 		}
 
 		return $perms
@@ -805,7 +809,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 							array set retval [list type directory]
 						}
 
-						::appfs::db eval {SELECT type, time, source, size, perms FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
+						::appfs::db eval {SELECT type, time, source, size, perms, file_sha1 FROM files WHERE package_sha1 = $pathinfo(package_sha1) AND file_directory = $directory AND file_name = $file;} retval {}
 
 						# Allow an administrator to supply additional permissions to remote files
 						if {[info exists retval(perms)]} {
@@ -813,7 +817,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 							# the database before we started lowercasing them
 							set retval(perms) [string tolower $retval(perms)]
 
-							set retval(perms) [::appfs::user::change_perms $path $retval(perms)]
+							set retval(perms) [::appfs::user::change_perms $path $retval(file_sha1) $retval(perms)]
 						}
 
 						if {[info exists retval(type)] && $retval(type) == "directory"} {
