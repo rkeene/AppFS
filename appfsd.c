@@ -629,7 +629,7 @@ static char *appfs_get_homedir(uid_t fsuid) {
 #if UINT_MAX < 4294967295
 #error Integer size is too small 
 #endif
-static unsigned long long appfs_get_path_inode(const char *path) {
+static unsigned long long appfs_get_path_inode(const char *path, int uid) {
 	unsigned int retval;
 	const unsigned char *p;
 
@@ -644,6 +644,8 @@ static unsigned long long appfs_get_path_inode(const char *path) {
 		retval += (retval << 1) + (retval << 4) + (retval << 7) + (retval << 8) + (retval << 24);
 #endif
 	}
+
+	retval += uid;
 
 	return(retval);
 }
@@ -666,7 +668,7 @@ static int appfs_get_path_info_cache_get(const char *path, uid_t uid, struct app
 	}
 
 	if (appfs_path_info_cache != NULL) {
-		hash_idx = (appfs_get_path_inode(path) + uid) % appfs_path_info_cache_size;
+		hash_idx = (appfs_get_path_inode(path, uid)) % appfs_path_info_cache_size;
 
 		if (appfs_path_info_cache[hash_idx]._cache_path != NULL) {
 			if (strcmp(appfs_path_info_cache[hash_idx]._cache_path, path) == 0 && appfs_path_info_cache[hash_idx]._cache_uid == uid) {
@@ -709,7 +711,7 @@ static void appfs_get_path_info_cache_add(const char *path, uid_t uid, struct ap
 		appfs_path_info_cache = calloc(appfs_path_info_cache_size, sizeof(*appfs_path_info_cache));
 	}
 
-	hash_idx = (appfs_get_path_inode(path) + uid) % appfs_path_info_cache_size;
+	hash_idx = (appfs_get_path_inode(path, uid)) % appfs_path_info_cache_size;
 
 	if (appfs_path_info_cache[hash_idx]._cache_path != NULL) {
 		free(appfs_path_info_cache[hash_idx]._cache_path);
@@ -742,7 +744,7 @@ static void appfs_get_path_info_cache_rm(const char *path, uid_t uid) {
 	}
 
 	if (appfs_path_info_cache != NULL) {
-		hash_idx = (appfs_get_path_inode(path) + uid) % appfs_path_info_cache_size;
+		hash_idx = (appfs_get_path_inode(path, uid)) % appfs_path_info_cache_size;
 
 		if (appfs_path_info_cache[hash_idx]._cache_path != NULL) {
 			free(appfs_path_info_cache[hash_idx]._cache_path);
@@ -913,7 +915,7 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	}
 
 	pathinfo->packaged = 0;
-	pathinfo->inode = appfs_get_path_inode(path);
+	pathinfo->inode = appfs_get_path_inode(path, fsuid);
 
 	appfs_call_libtcl(
 		attr_value_str = Tcl_GetString(attr_value);
