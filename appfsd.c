@@ -645,7 +645,10 @@ static unsigned long long appfs_get_path_inode(const char *path, int uid) {
 #endif
 	}
 
-	retval += uid;
+	if (uid >= 0) {
+		retval += uid;
+		retval++;
+	}
 
 	return(retval);
 }
@@ -915,7 +918,6 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 	}
 
 	pathinfo->packaged = 0;
-	pathinfo->inode = appfs_get_path_inode(path, fsuid);
 
 	appfs_call_libtcl(
 		attr_value_str = Tcl_GetString(attr_value);
@@ -1014,6 +1016,12 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 
 		Tcl_Release(interp);
 	)
+
+	if (pathinfo->packaged) {
+		pathinfo->inode = appfs_get_path_inode(path, -1);
+	} else {
+		pathinfo->inode = appfs_get_path_inode(path, fsuid);
+	}
 
 	if (retval == 0) {
 		appfs_get_path_info_cache_add(path, fsuid, pathinfo);
