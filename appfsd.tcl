@@ -385,11 +385,10 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			}
 
 			if {$pkgInfo(isLatest)} {
-				db eval {UPDATE packages SET isLatest = 0 WHERE hostname = $hostname AND package = $pkgInfo($package) AND os = $pkgInfo($package) AND cpuArch = $pkgInfo(cpuArch);}
+				db eval {UPDATE packages SET isLatest = 0 WHERE hostname = $hostname AND package = $pkgInfo(package) AND os = $pkgInfo(os) AND cpuArch = $pkgInfo(cpuArch);}
 			}
 
 			db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
-
 		}
 
 		# Look for packages that have been deleted
