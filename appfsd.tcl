@@ -679,6 +679,8 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			::appfs::getpkgmanifest $pathinfo(hostname) $pathinfo(package_sha1)
 		}
 
+		set retval(path_type) $pathinfo(_type)
+
 		switch -- $pathinfo(_type) {
 			"toplevel" {
 				set retval(type) directory
@@ -756,6 +758,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 
 				if {$localpath != "" && [info exists localpathinfo]} {
 					set retval(is_localfile) 1
+					unset retval(packaged)
 					catch {
 						set retval(time) $localpathinfo(mtime)
 
@@ -841,7 +844,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		array set pathinfo [_parsepath $path]
 
 		if {$pathinfo(_type) != "files"} {
-			return -code error "invalid type"
+			return -code error "invalid path type: Got \"$pathinfo(_type)\", need \"files\""
 		}
 
 		set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
@@ -905,7 +908,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		array set pathinfo [_parsepath $path]
 
 		if {$pathinfo(_type) != "files"} {
-			return -code error "invalid type"
+			return -code error "invalid path type: Got \"$pathinfo(_type)\", need \"files\""
 		}
 
 		set localpath [_localpath $pathinfo(package) $pathinfo(hostname) $pathinfo(file)]
@@ -954,8 +957,8 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 	proc unlinkpath {path} {
 		array set pathattrs [exists $path]
 
-		if {![info exists pathattrs(packaged)]} {
-			return -code error "invalid type"
+		if {$pathattrs(path_type) != "files"} {
+			return -code error "invalid path type: can only delete type \"files\" this is type \"$pathattrs(path_type)\""
 		}
 
 		set localpath $pathattrs(localpath)

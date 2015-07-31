@@ -650,6 +650,8 @@ static unsigned long long appfs_get_path_inode(const char *path, int uid) {
 		retval++;
 	}
 
+	APPFS_DEBUG("Looked up inode number for path=%s,uid=%i: %u", path, uid, retval);
+
 	return(retval);
 }
 
@@ -669,6 +671,8 @@ static int appfs_get_path_info_cache_get(const char *path, uid_t uid, struct app
 
 		return(-1);
 	}
+
+	APPFS_DEBUG("Looking up cache entry for path=%s,uid=%lli...", path, (long long) uid);
 
 	if (appfs_path_info_cache != NULL) {
 		hash_idx = (appfs_get_path_inode(path, uid)) % appfs_path_info_cache_size;
@@ -691,9 +695,9 @@ static int appfs_get_path_info_cache_get(const char *path, uid_t uid, struct app
 	}
 
 	if (retval == 0) {
-		APPFS_DEBUG("Cache hit on %s", path);
+		APPFS_DEBUG("Cache hit on path=%s,uid=%lli", path, (long long) uid);
 	} else {
-		APPFS_DEBUG("Cache miss on %s", path);
+		APPFS_DEBUG("Cache miss on path=%s,uid=%lli", path, (long long) uid);
 	}
 
 	return(retval);
@@ -1023,6 +1027,8 @@ static int appfs_get_path_info(const char *path, struct appfs_pathinfo *pathinfo
 		pathinfo->inode = appfs_get_path_inode(path, fsuid);
 	}
 
+	APPFS_DEBUG("Caching inode for path=%s,uid=%lli as %llu (packaged = %i)", path, (long long) fsuid, pathinfo->inode, pathinfo->packaged);
+
 	if (retval == 0) {
 		appfs_get_path_info_cache_add(path, fsuid, pathinfo);
 	} else {
@@ -1215,10 +1221,12 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 				stbuf->st_mode |= 0111;
 			}
 
-			if (pathinfo.typeinfo.file.suidRoot) {
-				changeOwnerToUserIfPackaged = 0;
+			if (pathinfo.packaged) {
+				if (pathinfo.typeinfo.file.suidRoot) {
+					changeOwnerToUserIfPackaged = 0;
 
-				stbuf->st_mode |= 04000;
+					stbuf->st_mode |= 04000;
+				}
 			}
 
 			if (pathinfo.typeinfo.file.worldaccessible) {
@@ -1254,7 +1262,7 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 			break;
 	}
 
-	if (pathinfo.packaged && changeOwnerToUserIfPackaged) {
+	if ((pathinfo.packaged && changeOwnerToUserIfPackaged) || (!pathinfo.packaged)) {
 		stbuf->st_uid   = appfs_get_fsuid();
 		stbuf->st_gid   = appfs_get_fsgid();
 		stbuf->st_mode |= 0200;
@@ -2020,7 +2028,7 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 	/**
 	 ** Add FUSE arguments which we always supply
 	 **/
-	fuse_opt_add_arg(args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,kernel_cache,entry_timeout=0,attr_timeout=0,big_writes,intr,hard_remove");
+	fuse_opt_add_arg(args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,direct_io,entry_timeout=0,attr_timeout=0,big_writes,intr,hard_remove");
 
 	if (getuid() == 0) {
 		fuse_opt_parse(args, NULL, NULL, NULL);
