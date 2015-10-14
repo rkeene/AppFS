@@ -21,8 +21,10 @@
  */
 #define FUSE_USE_VERSION 26
 
+#include <sys/resource.h>  
 #include <sys/fsuid.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <pthread.h>
 #include <signal.h>
 #include <limits.h>
@@ -2171,9 +2173,11 @@ int main(int argc, char **argv) {
 	Tcl_Interp *test_interp;
 	char *test_interp_error;
 	struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
-	int pthread_ret, aop_ret;
+	struct rlimit number_open_files;
+	int pthread_ret, aop_ret, rlimit_ret;
 	void *signal_ret;
 	char *argv0;
+	rlim_t number_open_files_max;
 
 	/*
 	 * Skip passed program name
@@ -2305,6 +2309,39 @@ int main(int argc, char **argv) {
 	if (appfs_threaded_tcl) {
 		Tcl_FinalizeNotifier(NULL);
 	}
+
+	/*
+	 * Increase resource limits for number of open files
+	 * to the maximum values, since we may be asked to
+	 * hold open many files on behalf of many other processes
+	 */
+	number_open_files.rlim_cur = number_open_files.rlim_max = RLIM_INFINITY;
+
+	rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
+
+	if (rlimit_ret != 0) {
+		rlimit_ret = getrlimit(RLIMIT_NOFILE, &number_open_files);
+		if (rlimit_ret == 0) {
+			number_open_files_max = number_open_files.rlim_max;
+
+			if (number_open_files_max < (1024 * 1024)) {
+				number_open_files.rlim_cur = number_open_files.rlim_max = 1024 * 1024;
+
+				rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
+			} else {
+				number_open_files.rlim_cur = number_open_files.rlim_max;
+			}
+
+			rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
+
+			if (rlimit_ret != 0 && number_open_files.rlim_cur != number_open_files_max) {
+				number_open_files.rlim_cur = number_open_files.rlim_max = number_open_files_max;
+
+				setrlimit(RLIMIT_NOFILE, &number_open_files);
+			}
+		}
+	}
+
 
 	/*
 	 * Enter the FUSE main loop -- this will process any arguments
