@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014  Roy Keene
+ * Copyright (c) 2014, 2015  Roy Keene
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -534,8 +534,6 @@ static uid_t appfs_get_fsuid(void) {
 
 /*
  * Determine the GID for the user making the current FUSE filesystem request.
- * This will be used to lookup the user's home directory so we can search for
- * locally modified files.
  */
 static gid_t appfs_get_fsgid(void) {
 	struct fuse_context *ctx;
@@ -1420,6 +1418,8 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 
 	fi->fh = fh;
 
+	APPFS_DEBUG("Opened \"%s\" (for \"%s\") with file descriptor %i", real_path, path, fh);
+
 	return(0);
 }
 
@@ -1442,7 +1442,7 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 	ssize_t read_ret;
 	int retval;
 
-	APPFS_DEBUG("Enter (path = %s, buf, %lli, %lli, fd=%lli)", path, (long long) size, (long long) offset, (long long) fi->fh);
+	APPFS_DEBUG("Enter (path = %s, buf, size = %lli, offset = %lli, fd = %lli)", path, (long long) size, (long long) offset, (long long) fi->fh);
 
 	retval = 0;
 
@@ -2028,7 +2028,7 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 	/**
 	 ** Add FUSE arguments which we always supply
 	 **/
-	fuse_opt_add_arg(args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,direct_io,entry_timeout=0,attr_timeout=0,big_writes,intr,hard_remove");
+	fuse_opt_add_arg(args, "-odefault_permissions,fsname=appfs,subtype=appfsd,use_ino,entry_timeout=0,attr_timeout=0,big_writes,intr,hard_remove");
 
 	if (getuid() == 0) {
 		fuse_opt_parse(args, NULL, NULL, NULL);
@@ -2071,7 +2071,7 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 
 						appfs_threaded_tcl = 0;
 					} else if (strcmp(optstr, "allow_other") == 0) {
-						APPFS_DEBUG("Passing option to FUSE: -o allow_Other");
+						APPFS_DEBUG("Passing option to FUSE: -o allow_other");
 
 						fuse_opt_parse(args, NULL, NULL, NULL);
 						fuse_opt_add_arg(args, "-oallow_other");
