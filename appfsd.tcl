@@ -341,8 +341,19 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		}
 
 		set file [download $hostname $indexhash]
-		set fd [open $file]
-		set data [read $fd]
+		catch {
+			set fd [open $file]
+		}
+
+		if {![info exists fd]} {
+			return -code error "Unable to download or open $file"
+		}
+
+		unset -nocomplain data
+		catch {
+			set data [read $fd]
+		}
+
 		close $fd
 
 		set curr_packages [list]
@@ -424,8 +435,19 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		}
 
 		set file [download $hostname $package_sha1]
-		set fd [open $file]
-		set pkgdata [read $fd]
+
+		catch {
+			set fd [open $file]
+		}
+
+		if {![info exists fd]} {
+			return -code error "Unable to download or open $file"
+		}
+
+		catch {
+			set pkgdata [read $fd]
+		}
+
 		close $fd
 
 		db transaction {
