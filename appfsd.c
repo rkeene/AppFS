@@ -633,7 +633,7 @@ static unsigned long long appfs_get_path_inode(const char *path, int uid) {
 	unsigned int retval;
 	const unsigned char *p;
 
-	retval = 2166136261; /* FNV-1a 32-bit offset_basis */
+	retval = 2166136261U; /* FNV-1a 32-bit offset_basis */
 
 	for (p = (unsigned char *) path; *p; p++) {
 		retval ^= (int) *p;
