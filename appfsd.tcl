@@ -288,6 +288,10 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 	}
 
 	proc getindex {hostname} {
+		if {[string match "*\[/~\]*" $hostname]} {
+			return -code error "Invalid hostname"
+		}
+
 		set now [clock seconds]
 
 		set lastUpdates [db eval {SELECT lastUpdate, ttl FROM sites WHERE hostname = $hostname LIMIT 1;}]
@@ -303,10 +307,6 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			return COMPLETE
 		}
 
-		if {[string match "*\[/~\]*" $hostname]} {
-			return -code error "Invalid hostname"
-		}
-
 		set url "http://$hostname/appfs/index"
 
 		catch {
@@ -318,10 +318,11 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			::http::cleanup $token
 		}
 
-		if {![info exists indexhash_data]} {
-			# Cache this result for 60 seconds
-			db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::nttl);}
+		# Note that we attempted to fetch this index and do not try
+		# again for a while
+		db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::nttl);}
 
+		if {![info exists indexhash_data]} {
 			return -code error "Unable to fetch $url"
 		}
 
