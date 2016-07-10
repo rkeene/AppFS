@@ -31,6 +31,8 @@ package require pki
 
 # Functions specifically meant for users to replace as a part of configuration
 namespace eval ::appfs::user {
+	variable download_method "tcl"
+
 	# User-replacable function to convert a hostname/hash/method to an URL
 	proc construct_url {hostname hash method} {
 		return "http://$hostname/appfs/$method/$hash"
@@ -53,6 +55,53 @@ namespace eval ::appfs::user {
 
 		return $perms
 	}
+
+	# User-replacable function to fetch a remote file
+	proc download_file {url {outputChannel ""}} {
+		switch -- $::appfs::user::download_method {
+			"curl" {
+				if {$outputChannel eq ""} {
+					return [exec curl -sS -L -- $url]
+				} else {
+					exec curl -sS -L -- $url >@ $outputChannel
+
+					return ""
+				}
+			}
+			"tcl" {
+				catch {
+					if {$outputChannel eq ""} {
+						set token [http::geturl $url]
+						set retval [http::data $token]
+					} else {
+						set token [http::geturl $url -binary true -channel $outputChannel]
+						set retval ""
+					}
+				} err
+
+				if {![info exists token]} {
+					return -code error "Unable to download \"$url\": $err"
+				}
+
+				set tokenCode [http::ncode $token]
+
+				http::cleanup $token
+
+				if {$tokenCode != "200"} {
+					return -code error "Unable to download \"$url\": Site did not return a 200 (returned $tokenCode)"
+				}
+
+				if {![info exists retval]} {
+					return -code error "Unable to download \"$url\": Site did not return proper data: $err"
+				}
+
+				return $retval
+			}
+
+		}
+
+		return -code error "Unable to download"
+	}
 }
 
 namespace eval ::appfs {
@@ -71,7 +120,11 @@ namespace eval ::appfs {
 		return $retval
 	}
 
-	proc _cachefile {url key {keyIsHash 1}} {
+	proc _cachefile {url key method {keyIsHash 1}} {
+		if {$keyIsHash && $method != "sha1"} {
+			return -code error "Only SHA1 hashing method is supported"
+		}
+
 		set filekey $key
 		if {$keyIsHash} {
 			set filekey [_hash_sep $filekey]
@@ -91,14 +144,7 @@ namespace eval ::appfs {
 		fconfigure $fd -translation binary
 
 		catch {
-			set token [::http::geturl $url -channel $fd -binary true]
-		}
-
-		if {[info exists token]} {
-			set ncode [::http::ncode $token]
-			::http::reset $token
-		} else {
-			set ncode "900"
+			::appfs::user::download_file $url $fd
 		}
 
 		close $fd
@@ -109,7 +155,7 @@ namespace eval ::appfs {
 			set hash $key
 		}
 
-		if {$ncode == "200" && $hash == $key} {
+		if {$hash == $key} {
 			file rename -force -- $tmpfile $file
 		} else {
 			file delete -force -- $tmpfile
@@ -278,7 +324,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 
 	proc download {hostname hash {method sha1}} {
 		set url [::appfs::user::construct_url $hostname $hash $method]
-		set file [_cachefile $url $hash]
+		set file [_cachefile $url $hash $method]
 
 		if {![file exists $file]} {
 			return -code error "Unable to fetch (file does not exist: $file)"
@@ -310,12 +356,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		set url "http://$hostname/appfs/index"
 
 		catch {
-			set token [::http::geturl $url]
-			if {[::http::ncode $token] == "200"} {
-				set indexhash_data [::http::data $token]
-			}
-			::http::reset $token
-			::http::cleanup $token
+			set indexhash_data [::appfs::user::download_file $url]
 		}
 
 		# Note that we attempted to fetch this index and do not try
