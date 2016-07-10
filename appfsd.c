@@ -1974,19 +1974,17 @@ static void appfs_terminate_interp_and_thread(void *_interp) {
 
 	APPFS_DEBUG("Called: _interp = %p", _interp);
 
-	if (_interp == NULL) {
+	if (_interp != NULL) {
+		interp = _interp;
+
+		APPFS_DEBUG("Terminating interpreter due to thread termination");
+
+		appfs_call_libtcl(
+			Tcl_DeleteInterp(interp);
+		)
+	} else {
 		APPFS_DEBUG("Terminating thread with no interpreter");
-
-		return;
 	}
-
-	interp = _interp;
-
-	APPFS_DEBUG("Terminating interpreter due to thread termination");
-
-	appfs_call_libtcl(
-		Tcl_DeleteInterp(interp);
-	)
 
 	appfs_call_libtcl(
 		Tcl_FinalizeThread();
