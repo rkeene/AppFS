@@ -425,7 +425,7 @@ static Tcl_Interp *appfs_TclInterp(void) {
 		interp = appfs_create_TclInterp(NULL);
 
 		if (interp == NULL) {
-			APPFS_DEBUG("Create interp failed, returningin failure.");
+			APPFS_DEBUG("Create interp failed, returning in failure.");
 
 			return(NULL);
 		}
