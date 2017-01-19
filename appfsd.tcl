@@ -44,13 +44,15 @@ namespace eval ::appfs::user {
 	}
 
 	# User-replacable function to update permissions
-	proc change_perms {file sha1 perms} {
+	proc change_perms {file hash perms {hashMethod "sha1"}} {
 		if {[info exists ::appfs::user::add_perms($file)]} {
 			append perms $::appfs::user::add_perms($file)
 		}
 
-		if {[info exists ::appfs::user::add_perms($sha1)]} {
-			append perms $::appfs::user::add_perms($sha1)
+		if {[info exists ::appfs::user::add_perms([list $hashMethod $hash])]} {
+			append perms $::appfs::user::add_perms([list $hashMethod $hash])
+		} elseif {$hashMethod eq "sha1" && [info exists ::appfs::user::add_perms($hash)]} {
+			append perms $::appfs::user::add_perms($hash)
 		}
 
 		return $perms
