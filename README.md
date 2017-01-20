@@ -18,25 +18,26 @@ Paths
     	Contains CSV file: hash,hashMethod,<certificateInDERFormatInHex>,<PKCS#1v1.5-signature-inDERFormatInHex>
 	                   \-------------/
                                   ^- Signed data
-    	Fetches: http://hostname/appfs/sha1/<hash>
-    	Contains CSV file: package,version,os,cpuArch,sha1,isLatest
+    	Fetches: http://hostname/appfs/<hashMethod>/<hash>
+    	Contains CSV file: package,version,os,cpuArch,packageManifestHash,isLatest
 
     /opt/appfs/hostname/package/os-cpuArch/version
-    /opt/appfs/hostname/sha1/
-    	Fetches: http://hostname/appfs/sha1/<sha1>
+    /opt/appfs/hostname/<hashMethod>/
+    	Fetches: http://hostname/appfs/<hashMethod>/<packageManifestHash>
     	Contains CSV file:
     		type,time,extraData,name
     		type == directory; extraData = (null)
     		type == symlink; extraData = source
-    		type == file; extraData = size,perms,sha1
+    		type == file; extraData = size,perms,fileHash
 
-    /opt/appfs/hostname/{sha1,package/os-cpuArch/version}/file
-    	Fetches: http://hostname/appfs/sha1/<sha1>
+    /opt/appfs/hostname/{packageManifestHash,package/os-cpuArch/version}/file
+    	Fetches: http://hostname/appfs/<hashMethod>/<fileHash>
 
 Database
 --------
-    packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest)
-    files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory)
+    sites(hostname, hashMethod, lastUpdate, ttl)
+    packages(hostname, packageManifestHash, package, version, os, cpuArch, isLatest, haveManifest)
+    files(packageManifestHash, type, time, source, size, perms, fileHash, file_name, file_directory)
 
 Resources
 ---------

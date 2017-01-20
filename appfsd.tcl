@@ -170,10 +170,6 @@ namespace eval ::appfs {
 	proc _isHash {value} {
 		set value [string tolower $value]
 
-		if {[string length $value] != 40} {
-			return false
-		}
-
 		if {![regexp {^[0-9a-f]*$} $value]} {
 			return false
 		}
@@ -181,7 +177,7 @@ namespace eval ::appfs {
 		return true
 	}
 
-	proc _verifySignatureAndCertificate {hostname certificate signature hash} {
+	proc _verifySignatureAndCertificate {hostname certificate signature hash hashmethod} {
 		set certificate [binary format "H*" $certificate]
 		set signature   [binary format "H*" $signature]
 
@@ -190,7 +186,7 @@ namespace eval ::appfs {
 		array set certificate_arr $certificate
 		set certificate_cn [::pki::x509::_dn_to_cn $certificate_arr(subject)]
 
-		if {![::pki::verify $signature "$hash,sha1" $certificate]} {
+		if {![::pki::verify $signature "$hash,$hashmethod" $certificate]} {
 			return false
 		}
 
@@ -314,14 +310,14 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		}
 
 		# Create tables
-		db eval {CREATE TABLE IF NOT EXISTS sites(hostname PRIMARY KEY, lastUpdate, ttl);}
-		db eval {CREATE TABLE IF NOT EXISTS packages(hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest);}
-		db eval {CREATE TABLE IF NOT EXISTS files(package_sha1, type, time, source, size, perms, file_sha1, file_name, file_directory);}
+		db eval {CREATE TABLE IF NOT EXISTS sites(hostname PRIMARY KEY, hashMethod, lastUpdate, ttl);}
+		db eval {CREATE TABLE IF NOT EXISTS packages(hostname, packageManifestHash, package, version, os, cpuArch, isLatest, haveManifest);}
+		db eval {CREATE TABLE IF NOT EXISTS files(packageManifestHash, hashMethod, type, time, source, size, perms, fileHash, file_name, file_directory);}
 
 		# Create indexes
 		db eval {CREATE INDEX IF NOT EXISTS sites_index ON sites (hostname);}
-		db eval {CREATE INDEX IF NOT EXISTS packages_index ON packages (hostname, sha1, package, version, os, cpuArch);}
-		db eval {CREATE INDEX IF NOT EXISTS files_index ON files (package_sha1, file_name, file_directory);}
+		db eval {CREATE INDEX IF NOT EXISTS packages_index ON packages (hostname, packageManifestHash, package, version, os, cpuArch);}
+		db eval {CREATE INDEX IF NOT EXISTS files_index ON files (packageManifestHash, file_name, file_directory);}
 	}
 
 	proc download {hostname hash {method sha1}} {
@@ -380,11 +376,11 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			return -code error "Invalid hash: $indexhash"
 		}
 
-		if {![_verifySignatureAndCertificate $hostname $indexhashcert $indexhashsig $indexhash]} {
+		if {![_verifySignatureAndCertificate $hostname $indexhashcert $indexhashsig $indexhash $indexhashmethod]} {
 			return -code error "Invalid signature or certificate from $hostname"
 		}
 
-		set file [download $hostname $indexhash]
+		set file [download $hostname $indexhash $indexhashmethod]
 		catch {
 			set fd [open $file]
 		}
@@ -421,7 +417,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 				set pkgInfo(os)       [_normalizeOS [lindex $work 2]]
 				set pkgInfo(cpuArch)  [_normalizeCPU [lindex $work 3]]
 				set pkgInfo(hash)     [string tolower [lindex $work 4]]
-				set pkgInfo(hash_type) "sha1"
+				set pkgInfo(hash_type) $indexhashmethod
 				set pkgInfo(isLatest) [expr {!![lindex $work 5]}]
 			}]} {
 				continue
@@ -434,7 +430,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 			lappend curr_packages $pkgInfo(hash)
 
 			# Do not do any additional work if we already have this package
-			set existing_packages [db eval {SELECT package FROM packages WHERE hostname = $hostname AND sha1 = $pkgInfo(hash);}]
+			set existing_packages [db eval {SELECT package FROM packages WHERE hostname = $hostname AND packageManifestHash = $pkgInfo(hash);}]
 			if {[lsearch -exact $existing_packages $pkgInfo(package)] != -1} {
 				continue
 			}
@@ -443,7 +439,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 				db eval {UPDATE packages SET isLatest = 0 WHERE hostname = $hostname AND package = $pkgInfo(package) AND os = $pkgInfo(os) AND cpuArch = $pkgInfo(cpuArch);}
 			}
 
-			db eval {INSERT INTO packages (hostname, sha1, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
+			db eval {INSERT INTO packages (hostname, packageManifestHash, package, version, os, cpuArch, isLatest, haveManifest) VALUES ($hostname, $pkgInfo(hash), $pkgInfo(package), $pkgInfo(version), $pkgInfo(os), $pkgInfo(cpuArch), $pkgInfo(isLatest), 0);}
 		}
 
 		# Look for packages that have been deleted
@@ -457,28 +453,29 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		}
 
 		foreach package [array names found_packages_arr] {
-			db eval {DELETE FROM packages WHERE hostname = $hostname AND sha1 = $package;}
+			db eval {DELETE FROM packages WHERE hostname = $hostname AND packageManifestHash = $package;}
 		}
 
-		db eval {INSERT OR REPLACE INTO sites (hostname, lastUpdate, ttl) VALUES ($hostname, $now, $::appfs::ttl);}
+		db eval {INSERT OR REPLACE INTO sites (hostname, hashMethod, lastUpdate, ttl) VALUES ($hostname, $indexhashmethod, $now, $::appfs::ttl);}
 
 		appfsd::get_path_info_cache_flush
 
 		return COMPLETE
 	}
 
-	proc getpkgmanifest {hostname package_sha1} {
-		set haveManifest [db onecolumn {SELECT haveManifest FROM packages WHERE sha1 = $package_sha1 LIMIT 1;}]
+	proc getpkgmanifest {hostname packageManifestHash} {
+		set haveManifest [db onecolumn {SELECT haveManifest FROM packages WHERE packageManifestHash = $packageManifestHash LIMIT 1;}]
+		set siteHashMethod [db onecolumn {SELECT hashMethod FROM sites WHERE hostname = $hostname LIMIT 1;}
 
 		if {$haveManifest == "1"} {
 			return COMPLETE
 		}
 
-		if {![_isHash $package_sha1]} {
+		if {![_isHash $packageManifestHash]} {
 			return FAIL
 		}
 
-		set file [download $hostname $package_sha1]
+		set file [download $hostname $packageManifestHash $siteHashMethod]
 
 		catch {
 			set fd [open $file]
