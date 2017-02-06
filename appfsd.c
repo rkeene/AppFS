@@ -1138,6 +1138,39 @@ static void appfs_exit(void) {
 
 	return;
 }
+
+#endif
+
+#if defined(APPFS_EXEC_PATH_ENABLE_MAJOR_SECURITY_HOLE)
+static void appfs_runTcl(const char *script, size_t scriptLen) {
+	Tcl_Interp *interp;
+	Tcl_Obj *scriptObj;
+	int tcl_ret;
+
+	interp = appfs_TclInterp();
+	if (interp == NULL) {
+		APPFS_DEBUG("Error creating an interpreter.");
+
+		return;
+	}
+
+	appfs_call_libtcl(scriptObj = Tcl_NewStringObj(script, scriptLen);)
+
+	if (scriptObj == NULL) {
+		APPFS_DEBUG("Error creating a script object.");
+
+		return;
+	}
+
+	appfs_call_libtcl(tcl_ret = Tcl_EvalObjEx(interp, scriptObj, TCL_EVAL_DIRECT);)
+	if (tcl_ret != TCL_OK) {
+		appfs_call_libtcl(
+			APPFS_DEBUG("Script returned error %i: %s", tcl_ret, Tcl_GetStringResult(interp));
+		)
+	}
+
+	return;
+}
 #endif
 
 static int appfs_fuse_readlink(const char *path, char *buf, size_t size) {
@@ -1180,9 +1213,24 @@ static int appfs_fuse_getattr(const char *path, struct stat *stbuf) {
 	 * This is a major security issue so we cannot let it be compiled into
 	 * any release
 	 */
-
 	if (strcmp(path, "/exit") == 0) {
 		appfs_exit();
+	}
+#endif
+#if defined(APPFS_EXEC_PATH_ENABLE_MAJOR_SECURITY_HOLE)
+	if (strcmp(path, "/exec") == 0) {
+		memset(stbuf, 0, sizeof(struct stat));
+
+		stbuf->st_mtime = 0;
+		stbuf->st_ctime = 0;
+		stbuf->st_atime = 0;
+		stbuf->st_ino   = 3;
+		stbuf->st_mode  = 0;
+		stbuf->st_mode  = S_IFREG | 0600;
+		stbuf->st_nlink = 1;
+		stbuf->st_size  = 0;
+
+		return(retval);
 	}
 #endif
 
@@ -1337,6 +1385,14 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
 
+#if defined(APPFS_EXEC_PATH_ENABLE_MAJOR_SECURITY_HOLE)
+	if (strcmp(path, "/exec") == 0) {
+		fi->fh = 0;
+
+		return(0);
+	}
+#endif
+
 	gpi_ret = appfs_get_path_info(path, &pathinfo);
 
 	if ((fi->flags & (O_WRONLY|O_CREAT)) == (O_CREAT|O_WRONLY)) {
@@ -1428,6 +1484,14 @@ static int appfs_fuse_open(const char *path, struct fuse_file_info *fi) {
 static int appfs_fuse_close(const char *path, struct fuse_file_info *fi) {
 	int close_ret;
 
+	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+#if defined(APPFS_EXEC_PATH_ENABLE_MAJOR_SECURITY_HOLE)
+	if (strcmp(path, "/exec") == 0) {
+		return(0);
+	}
+#endif
+
 	appfs_get_path_info_cache_rm(path, appfs_get_fsuid());
 
 	close_ret = close(fi->fh);
@@ -1481,6 +1545,14 @@ static int appfs_fuse_write(const char *path, const char *buf, size_t size, off_
 	int retval;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+#if defined(APPFS_EXEC_PATH_ENABLE_MAJOR_SECURITY_HOLE)
+	if (strcmp(path, "/exec") == 0) {
+		appfs_runTcl(buf, size);
+
+		return(size);
+	}
+#endif
 
 	appfs_get_path_info_cache_rm(path, appfs_get_fsuid());
 
@@ -1587,6 +1659,12 @@ static int appfs_fuse_truncate(const char *path, off_t size) {
 	int truncate_ret;
 
 	APPFS_DEBUG("Enter (path = %s, ...)", path);
+
+#if defined(APPFS_EXEC_PATH_ENABLE_MAJOR_SECURITY_HOLE)
+	if (strcmp(path, "/exec") == 0) {
+		return(0);
+	}
+#endif
 
 	real_path = appfs_localpath(path);
 	if (real_path == NULL) {
