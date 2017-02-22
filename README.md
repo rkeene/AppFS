@@ -6,7 +6,7 @@ Usage
 -----
 Run:
 	1. # mkdir /tmp/appfs-cache /opt/appfs
-	2. # appfsd /opt/appfs
+	2. # appfsd /tmp/appfs-cache /opt/appfs
 
 
 Paths
