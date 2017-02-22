@@ -1154,7 +1154,11 @@ static void appfs_runTcl(const char *script, size_t scriptLen) {
 		return;
 	}
 
-	appfs_call_libtcl(scriptObj = Tcl_NewStringObj(script, scriptLen);)
+	appfs_call_libtcl(
+		scriptObj = Tcl_NewStringObj(script, scriptLen);
+
+		Tcl_IncrRefCount(scriptObj);
+	)
 
 	if (scriptObj == NULL) {
 		APPFS_DEBUG("Error creating a script object.");
@@ -1162,7 +1166,11 @@ static void appfs_runTcl(const char *script, size_t scriptLen) {
 		return;
 	}
 
-	appfs_call_libtcl(tcl_ret = Tcl_EvalObjEx(interp, scriptObj, TCL_EVAL_DIRECT);)
+	appfs_call_libtcl(
+		tcl_ret = Tcl_EvalObjEx(interp, scriptObj, TCL_EVAL_DIRECT);
+		Tcl_DecrRefCount(scriptObj);
+	)
+
 	if (tcl_ret != TCL_OK) {
 		appfs_call_libtcl(
 			APPFS_DEBUG("Script returned error %i: %s", tcl_ret, Tcl_GetStringResult(interp));
