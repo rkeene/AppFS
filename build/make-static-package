@@ -1,0 +1,236 @@
+#! /usr/bin/env bash
+
+###############################
+## UPSTREAM ###################
+###############################
+fuse_version='2.9.7'
+fuse_url="https://github.com/libfuse/libfuse/releases/download/fuse-${fuse_version}/fuse-${fuse_version}.tar.gz"
+fuse_sha256='832432d1ad4f833c20e13b57cf40ce5277a9d33e483205fc63c78111b3358874'
+
+kitcreator_version='0.10.0'
+kitcreator_url="http://rkeene.org/devel/kitcreator-${kitcreator_version}.tar.gz"
+kitcreator_sha256='ac815b74709d27791021099418cf16c2ff7f5096d3fb7b17c50e6742f5a1a2bb'
+
+###############################
+## USER SUPPLIED ##############
+###############################
+_setup_cc="${HOME}/root/cross-compilers/setup-cc"
+_config_sub="$(ls -1 /usr/share/automake-*/config.sub 2>/dev/null | head -n 1)"
+appfs_tarball="$1"
+host_platform="$2"
+if [ -z "${appfs_tarball}" ]; then
+	echo "Usage: make-static-archive <tarball> [<host_platform>]" >&2
+
+	exit 1
+fi
+
+appfs_tarball="$(readlink -f "${appfs_tarball}")"
+if [ ! -e "${appfs_tarball}" ]; then
+	echo "Archive (${appfs_tarball}) not found." >&2
+
+	exit 1
+fi
+
+###############################
+## HELPERS ####################
+###############################
+function download() {
+	local archive url sha256
+	local tmpfile tmpfile_sha256
+
+	archive="$1"
+	url="$2"
+	sha256="$3"
+
+	tmpfile="${archive}.tmp"
+
+	rm -f "${tmpfile}"
+	curl -sS -L -o "${tmpfile}" "${url}" || return 1
+
+	tmpfile_sha256="$(openssl dgst -sha256 "${tmpfile}" | sed 's@^.*= *@@')"
+	if [ "${tmpfile_sha256}" != "${sha256}" ]; then
+		echo "SHA-256 mismatch.  Got: ${tmpfile_sha256}; Expected: ${sha256}" >&2
+
+		return 1
+	fi
+
+	rm -f "${archive}"
+	mv "${tmpfile}" "${archive}" || return 1
+
+	return 0
+}
+
+function extract() {
+	local archive directory
+	local marker
+
+	marker="$(openssl rand 20 -hex)"
+
+	archive="$1"
+	directory="$2"
+
+	mkdir -p "${directory}/.${marker}" || return 1
+	cat "${archive}" | (
+		cd "${directory}/.${marker}" || exit 1
+		gzip -dc | tar -xf -
+
+		if [ -d "$(echo *)" ]; then
+			mv * .TMP
+			mv .TMP/* .
+			rm -rf .TMP
+		fi
+
+		find . -print0 | cpio -0 -ump .. || exit 1
+
+		exit 0
+	) || return 1
+
+	rm -rf "${directory}/.${marker}"
+
+	return 0
+}
+
+###############################
+## MAIN #######################
+###############################
+
+# 1. Create a workspace
+workdir="$(mktemp -d)" || exit 1
+startdir="$(pwd)" || exit 1
+cd "${workdir}" || exit 1
+
+# 2. Configure cross-compiling environment
+## 2.a. Set configure options to point to our fake root directory
+configure_extra=(--prefix="${workdir}/root" --libdir="${workdir}/root/lib")
+
+## 2.b. Setup environment to match requested platform
+if [ -n "${host_platform}" ]; then
+	eval $("${_setup_cc}" "${host_platform}")
+	unset PKG_CONFIG
+
+	configure_extra_common=("${configure_extra_common[@]}" --host="${host_platform}")
+fi
+configure_extra=("${configure_extra[@]}" "${configure_extra_common[@]}")
+
+# 3. Compile FUSE
+## 3.a. Download FUSE
+download fuse.tar.gz "${fuse_url}" "${fuse_sha256}" || exit 1
+
+## 3.b. Extract FUSE
+extract fuse.tar.gz fuse || exit 1
+rm -f fuse.tar.gz
+
+## 3.c. Compile FUSE
+(
+	cd fuse || exit 1
+
+	./configure --disable-shared --enable-static "${configure_extra[@]}" || exit 1
+	make -j5 || exit 1
+	make install MOUNT_FUSE_PATH="${workdir}/root/bin" INIT_D_PATH="${workdir}/root/etc/init.d" UDEV_RULES_PATH="${workdir}/root/etc/udev/rules.d" || exit 1
+
+	exit 0
+) || exit 1
+rm -rf fuse
+
+# 4. Compile Static KitDLL
+## 4.a. Download KitCreator
+download kitcreator.tar.gz "${kitcreator_url}" "${kitcreator_sha256}" || exit 1
+
+## 4.b. Extract KitCreator
+extract kitcreator.tar.gz kitcreator || exit 1
+rm -f kitcreator.tar.gz
+
+## 4.c. Patch KitCreator to build a correct Tcl
+### XXX:TODO
+
+## 4.d. Compile KitCreator
+(
+	cd kitcreator || exit 1
+
+	export KITCREATOR_PKGS='kitdll'
+	export KITCREATOR_STATIC_KITDLL='1'
+	export KC_TCL_STATICPKGS='1'
+	export KC_TCL_CFLAGS='-DPURIFY=1'
+	export KC_TCL_CPPFLAGS='-DPURIFY=1'
+
+	./kitcreator "${configure_extra_common[@]}" tcl_cv_strtoul_unbroken=ok || exit 1
+) || exit 1
+libtclkit_sdk_archive="$(echo kitcreator/libtclkit*.tar.gz)"
+
+## 4.e. Extract SDK
+extract "${libtclkit_sdk_archive}" root || exit 1
+rm -rf kitcreator
+
+# 5. Compile AppFS
+## 5.a. Extract AppFS
+extract "${appfs_tarball}" appfs || exit 1
+
+## 5.b. Patch AppFS (temporary)
+sed -i 's/{TCL_LIB_SPEC}/& $${TCL_LIBS}/' appfs/Makefile
+
+## 5.c. Compile AppFS
+(
+	cd appfs || exit 1
+
+	export PKG_CONFIG_PATH="${workdir}/root/lib/pkgconfig:${PKG_CONFIG_PATH:-/dev/null/null}"
+
+	if [ -n "${CC}" ]; then
+		make_extra=("${make_extra[@]}" CC="${CC}")
+	fi
+
+	if [ -n "${PKG_CONFIG}" ]; then
+		make_extra=("${make_extra[@]}" PKG_CONFIG="${PKG_CONFIG}")
+	fi
+
+	make_extra=("${make_extra[@]}" TCLKIT_SDK_DIR="${workdir}/root" TCL_LDFLAGS='' LDFLAGS='-static' PREFIX='')
+
+	make "${make_extra[@]}" || exit 1
+	make install DESTDIR="${workdir}/output" "${make_extra[@]}" || exit 1
+
+	make distclean || exit 1
+	make APPFS_DEBUG_BUILD=1 "${make_extra[@]}" || exit 1
+	cp appfsd "${workdir}/output/sbin/appfsd_g" || exit 1
+) || exit 1
+
+# 6. Create archive
+## 6.a. Determine AppFS version and compiled platform target
+### Version
+appfs_version="$(grep '^APPFS_VERSION.*=' appfs/Makefile | sed 's@.*= *@@')"
+
+### Platform
+host_platform_simple="$(${CC:-cc} -dumpmachine)"
+
+host_platform_simple_resolved="$("${_config_sub:-echo}" "${host_platform_simple}" 2>/dev/null)"
+if [ -n "${host_platform_simple_resolved}" ]; then
+	host_platform_simple="${host_platform_simple_resolved}"
+fi
+
+case "${host_platform_simple}" in
+	'')
+		host_platform_simple_os="unknown"
+		host_platform_simple_cpu="unknown"
+		;;
+	*)
+		host_platform_simple_os="$(echo "${host_platform_simple}" | cut -f 3 -d '-')"
+		host_platform_simple_cpu="$(echo "${host_platform_simple}" | cut -f 1 -d '-')"
+		;;
+esac
+host_platform_simple="${host_platform_simple_os}-${host_platform_simple_cpu}"
+
+## 6.b. Create archive with the specified name
+output_archive="${workdir}/appfs-${appfs_version}-${host_platform_simple}.tar.gz"
+(
+	cd "${workdir}/output" || exit 1
+	tar -cf - *
+) | gzip -9c > "${output_archive}"
+rm -rf output appfs root
+
+## 6.c. Move archive to some place safe
+mv -t "${startdir}" "${output_archive}" || exit 1
+
+## 6.d. Cleanup
+cd /
+rmdir "${workdir}" || exit 1
+
+# 7. Declare victory
+exit 0
