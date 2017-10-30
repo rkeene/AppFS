@@ -92,7 +92,36 @@ function clear() {
 	call_appfsd --sqlite3 'DELETE FROM sites; DELETE FROM packages; DELETE FROM files; VACUUM;' || return 1
 }
 
+function install() {
+	local site packages
+	local package packagedir
+
+	site="$1"
+	shift
+
+	packages=("$@")
+
+	if [ -z "${site}" -o -z "${packages[*]}" ]; then
+		echo "usage: appfs-cache install <site> <package>..." >&2
+
+		return 1
+	fi
+
+	for package in "${packages[@]}"; do
+		packagedir="/opt/appfs/${site}/${package}/platform/latest"
+
+		## XXX:TODO: Allow installation to other locations
+		ln -s "${packagedir}"/bin/* /bin/
+	done
+
+	return 0
+}
+
 case "$1" in
+	install)
+		shift
+		install "$@" || exit 1
+		;;
 	invalidate)
 		invalidate || exit 1
 		;;
