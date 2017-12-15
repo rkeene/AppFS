@@ -107,7 +107,7 @@ namespace eval ::appfs::user {
 namespace eval ::appfs {
 	variable cachedir "/tmp/appfs-cache"
 	variable ttl 3600
-	variable nttl 60
+	variable nttl 3600
 	variable trusted_cas [list]
 	variable platform [::platform::generic]
 
