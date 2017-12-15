@@ -51,6 +51,7 @@ int main(int argc, char **argv) {
 	}
 
 	mkdir("/bin", 0755);
+	mkdir("/lib", 0755);
 	mkdir("/opt", 0755);
 	mkdir("/opt/appfs", 0755);
 	mkdir("/var", 0755);
@@ -59,13 +60,16 @@ int main(int argc, char **argv) {
 	run("/bin/appfsd", "appfsd", "/var/cache/appfs", "/opt/appfs", NULL);
 
 	symlink(".", "/usr");
+	symlink("lib", "/lib64");
+
 	symlink("/opt/appfs/core.appfs.rkeene.org/bash/platform/latest/bin/bash", "/bin/bash");
 	symlink("/opt/appfs/core.appfs.rkeene.org/coreutils/platform/latest/bin/env", "/bin/env");
 
 	symlink("/bin/bash", "/bin/sh");
 
 	setenv("PATH", "/bin:/opt/appfs/core.appfs.rkeene.org/coreutils/platform/latest/bin", 1);
-	run("/bin/appfs-install-pkg", "appfs-install-pkg", "core.appfs.rkeene.org", "coreutils", NULL);
+	run("/bin/appfs-cache", "appfs-cache", "install", "-lib", "core.appfs.rkeene.org", "glibc", NULL);
+	run("/bin/appfs-cache", "appfs-cache", "install", "core.appfs.rkeene.org", "coreutils", NULL);
 	setenv("PATH", "/bin", 1);
 
 	if (argc == 1) {
