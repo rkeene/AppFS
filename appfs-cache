@@ -95,6 +95,13 @@ function clear() {
 function install() {
 	local site packages
 	local package packagedir
+	local includeLib
+
+	includeLib='0'
+	if [ "$1" = '-lib' ]; then
+		shift
+		includeLib='1'
+	fi
 
 	site="$1"
 	shift
@@ -111,7 +118,10 @@ function install() {
 		packagedir="/opt/appfs/${site}/${package}/platform/latest"
 
 		## XXX:TODO: Allow installation to other locations
-		ln -s "${packagedir}"/bin/* /bin/
+		ln -fs "${packagedir}"/bin/* /bin/
+		if [ "${includeLib}" = '1' ]; then
+			ln -fs "${packagedir}"/lib/* /lib/
+		fi
 	done
 
 	return 0
@@ -121,6 +131,7 @@ case "$1" in
 	install)
 		shift
 		install "$@" || exit 1
+		exit 0
 		;;
 	invalidate)
 		invalidate || exit 1
