@@ -1,9 +1,9 @@
 #! /usr/bin/env bash
 
-version='8.6.3'
+version='8.6.9'
 url="http://sourceforge.net/projects/tcl/files/Tcl/${version}/tcl${version}-src.tar.gz"
 domain=core.appfs.rkeene.org
-sha256='6ce0778de0d50daaa9c345d7c1fd1288fb658f674028812e7eeee992e3051005'
+sha256='ad0cd2de2c87b9ba8086b43957a0de3eb2eb565c7159d5f53ccbba3feb915f4e'
 require=(zlib)
 
 function preconfigure() {
