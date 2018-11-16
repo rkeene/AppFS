@@ -19,6 +19,10 @@ if [ -z "${pkg}" ]; then
 	exit 1
 fi
 
+function predownload() {
+	:
+}
+
 function download() {
 	if [ ! -e "${pkgarchive}" ]; then
 		# Download
@@ -26,7 +30,7 @@ function download() {
 		rm -f src.new
 
 		## Fetch file
-		wget -O src.new "${url}" || exit 1
+		wget --no-check-certificate -O src.new "${url}" || exit 1
 
 		## Verify signature
 		src_sha256="$(openssl sha256 'src.new' | sed 's@^.*= @@')"
@@ -106,6 +110,27 @@ function apply_patches() {
 function verifyRequiredPackages() {
 	local pkg pkgdomain pkgversion
 	local pkgdir pkgconfigdir pkgfound
+	local use_native_platform
+	local add_headers_str
+
+	SAVE_PKG_CONFIG_PATH="${PKG_CONFIG_PATH}"
+	PKG_CONFIG_PATH=''
+	export PKG_CONFIG_PATH
+
+	use_native_platform='0'
+	for pkg in "${require[@]}"; do
+		case "${pkg}" in
+			@native-os)
+				use_native_platform='1'
+				;;
+		esac
+	done
+
+	if [ "${use_native_platform}" = '1' ]; then
+		add_headers_str='-I'
+	else
+		add_headers_str='-isystem '
+	fi
 
 	for pkg in "${require[@]}"; do
 		pkgdomain=''
@@ -120,6 +145,11 @@ function verifyRequiredPackages() {
 		esac
 
 		case "${pkg}" in
+			@native-os)
+				PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:${SAVE_PKG_CONFIG_PATH}"
+
+				continue
+				;;
 			@*)
 				# Fake package
 				continue
@@ -144,7 +174,8 @@ function verifyRequiredPackages() {
 		fi
 
 		pkgfound='0'
-		for pkgdir in "/opt/appfs/${pkgdomain}/${pkg}/platform"/${pkgversion:-latest} "/opt/appfs/${pkgdomain}/${pkg}/platform"/${pkgversion:-*}; do
+		ADD_PATH=''
+		for pkgdir in "/opt/appfs/${pkgdomain}/${pkg}/${os}-${arch}"/${pkgversion:-latest} "/opt/appfs/${pkgdomain}/${pkg}/${os}-${arch}"/${pkgversion:-*}; do
 			pkgconfigdir="${pkgdir}/lib/pkgconfig"
 
 			if [ ! -d "${pkgdir}" ]; then
@@ -162,17 +193,22 @@ function verifyRequiredPackages() {
 			for pkgchange in "${pkgchanges[@]}"; do
 				case "${pkgchange}" in
 					CFLAGS)
-						CFLAGS="${CFLAGS} -isystem ${pkgdir}/include"
-						CPPFLAGS="${CPPFLAGS} -isystem ${pkgdir}/include"
-						export CFLAGS CPPFLAGS
+						CFLAGS="${CFLAGS} ${add_headers_str}${pkgdir}/include"
+						CXXFLAGS="${CFLAGS} ${add_headers_str}${pkgdir}/include"
+						CPPFLAGS="${CPPFLAGS} ${add_headers_str}${pkgdir}/include"
+						export CFLAGS CXXFLAGS CPPFLAGS
 						;;
 					LDFLAGS)
 						LDFLAGS="${LDFLAGS} -L${pkgdir}/lib -Wl,-rpath,${pkgdir}/lib"
 						export LDFLAGS
 						;;
 					PATH)
-						PATH="${PATH}:${pkgdir}/bin"
-						export PATH
+						ADD_PATH="${ADD_PATH}:${pkgdir}/bin"
+						;;
+					PERL5LIB)
+						PERL5LIB="${pkgdir}/lib/perl5:${PERL5LIB}"
+						PERL5LIB="${pkgdir}/lib/site_perl:${PERL5LIB}"
+						export PERL5LIB
 						;;
 					PKG_CONFIG_PATH)
 						if [ -d "${pkgconfigdir}" ]; then
@@ -189,6 +225,10 @@ function verifyRequiredPackages() {
 		if [ "${pkgfound}" = '0' ]; then
 			die "Package ${pkg}/${pkgversion:-*}@${pkgdomain} not found."
 		fi
+
+		ADD_PATH="$(echo "${ADD_PATH}" | sed 's@^:*@@')"
+
+		PATH="${ADD_PATH}:${PATH}"
 	done
 }
 
@@ -197,14 +237,23 @@ function verifyPrerequisites() {
 }
 
 function determineOsArch() {
-	os="$(uname -s | dd conv=lcase 2>/dev/null)"
-	arch="$(uname -m | dd conv=lcase 2>/dev/null)"
+	if [ -z "${APPFS_BUILD_OS}" ]; then
+		os="$(uname -s | dd conv=lcase 2>/dev/null)"
+	else
+		os="${APPFS_BUILD_OS}"
+	fi
 
-	case "${arch}" in
-		i?86)
-			arch='ix86'
-			;;
-	esac
+	if [ -z "${APPFS_BUILD_ARCH}" ]; then
+		arch="$(uname -m | dd conv=lcase 2>/dev/null)"
+
+		case "${arch}" in
+			i?86)
+				arch='ix86'
+				;;
+		esac
+	else
+		arch="${APPFS_BUILD_ARCH}"
+	fi
 }
 
 function determinePrefix() {
@@ -228,13 +277,13 @@ function postconfigure() {
 function configure_gcc() {
 	local glibcdir linuxheadersdir
 	local dynlinker
-	local gcc_default_headers
+	local gcc_default_headers_c gcc_default_headers_cxx
 	local pkg use_native_platform
 
-	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/platform/latest"
+	glibcdir="/opt/appfs/core.appfs.rkeene.org/glibc/${os}-${arch}/latest"
 	glibcdir="$(readlink -f "${glibcdir}")"
 
-	linuxheadersdir="/opt/appfs/core.appfs.rkeene.org/linux-headers/platform/latest"
+	linuxheadersdir="/opt/appfs/core.appfs.rkeene.org/linux-headers/${os}-${arch}/latest"
 	linuxheadersdir="$(readlink -f "${linuxheadersdir}")"
 
 	dynlinker="$(ls "${glibcdir}"/lib/ld-linux*.so.* | tail -n 1)"
@@ -253,31 +302,37 @@ function configure_gcc() {
 	done
 
 	if [ "${use_native_platform}" = '0' ]; then
-		gcc_default_headers="$(echo '' | ${CPP:-cpp} -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-isystem @' | tr $'\n' ' ')"
+		gcc_default_headers_c="$(echo '' | ${CPP:-cpp} -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-isystem @' | tr $'\n' ' ')"
+		gcc_default_headers_cxx="$(echo '' | ${CPP:-cpp} -x c++ -v 2>&1 | sed '/^End of search list/,$ d;0,/search starts here:$/ d' | grep '/gcc/' | sed 's@^ *@-isystem @' | tr $'\n' ' ')"
 
-		CC="${CC:-gcc} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
-		CXX="${CXX:-g++} -nostdinc ${gcc_default_headers} -isystem ${glibcdir}/include"
+		CC="${CC:-gcc} -nostdinc ${gcc_default_headers_c} -isystem ${glibcdir}/include"
+		CXX="${CXX:-g++} -nostdinc ${gcc_default_headers_cxx} -isystem ${glibcdir}/include"
 
 		if ! echo " ${require[*]} " | grep ' linux-headers[/@: ]' >/dev/null; then
 			CC="${CC} -isystem ${linuxheadersdir}/include"
 			CXX="${CXX} -isystem ${linuxheadersdir}/include"
 		fi
 	else
-		CC="${CC:-gcc} -isystem ${glibcdir}/include"
-		CXX="${CXX:-g++} -isystem ${glibcdir}/include"
+		CC="${CC:-gcc}"
+		CXX="${CXX:-g++}"
 	fi
 
 	BUILD_CC="${CC}"
 	HOST_CC="${CC}"
+	BUILD_CXX="${CXX}"
+	HOST_CXX="${CXX}"
 
-	LDFLAGS="${LDFLAGS} -L${glibcdir}/lib -Wl,-rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
+	if [ "${use_native_platform}" = '0' ]; then
+		LDFLAGS="${LDFLAGS} -L${glibcdir}/lib -Wl,-rpath,${glibcdir}/lib -Wl,--dynamic-linker,${dynlinker}"
+	fi
+
 	if [ -z "${appfs_build_no_default_symver}" ]; then
 		LDFLAGS="${LDFLAGS} -Wl,--default-symver"
 	fi
 
 	PKG_CONFIG_LIBDIR="${glibcdir}/lib/pkgconfig"
 
-	export CC BUILD_CC HOST_CC LDFLAGS PKG_CONFIG_LIBDIR
+	export CC CXX BUILD_CC HOST_CC BUILD_CXX HOST_CXX LDFLAGS PKG_CONFIG_LIBDIR
 }
 
 function configure() {
@@ -308,7 +363,7 @@ function postinstall() {
 }
 
 function install() {
-	make install DESTDIR="${destdir}"
+	make "${make_extra[@]}" install DESTDIR="${destdir}"
 }
 
 function cleanup() {
@@ -372,6 +427,7 @@ cd "${workdir}" || exit 1
 workdir="$(pwd)"
 
 # Download
+predownload
 download
 
 # Extract
@@ -380,18 +436,21 @@ extract
 # If we just have one directory, use that directory
 dir="$(echo *)"
 if [ -e "${dir}" ]; then
-	mv "${dir}"/* .
+	(
+		shopt -s dotglob
+		mv "${dir}"/* .
+	)
 fi
 
-# Verify pre-requisites are met
-verifyRequiredPackages || die 'Required packages missing'
-verifyPrerequisites || die 'Prerequisities failed'
+# Determine properties
+determinePrefix
 
 # Start logging
 set -x
 
-# Determine properties
-determinePrefix
+# Verify pre-requisites are met
+verifyRequiredPackages || die 'Required packages missing'
+verifyPrerequisites || die 'Prerequisities failed'
 
 # Apply patches
 apply_patches
