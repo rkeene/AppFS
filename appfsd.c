@@ -21,12 +21,10 @@
  */
 #define FUSE_USE_VERSION 26
 
-#include <sys/resource.h>  
 #include <sys/fsuid.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <pthread.h>
-#include <signal.h>
 #include <limits.h>
 #include <string.h>
 #include <stdarg.h>
@@ -48,13 +46,14 @@
 
 /* Debugging macros */
 #ifdef DEBUG
-int appfs_debug_fd = STDERR_FILENO;
+FILE *appfs_debug_fd = NULL;
 #define APPFS_DEBUG(x...) { \
 	char buf[8192]; \
 	int bufoff = 0; \
-	if (appfs_debug_fd == -1) { \
-		appfs_debug_fd = open("/tmp/appfsd.log", O_WRONLY | O_APPEND | O_CREAT, 0600); \
+	if (appfs_debug_fd == NULL) { \
+		appfs_debug_fd = fopen("/tmp/appfsd.log", "a"); \
 	}; \
+	if (appfs_debug_fd == NULL) { appfs_debug_fd = stderr; } \
 	bufoff = snprintf(buf, sizeof(buf), "[debug] [t=%llx] %s:%i:%s: ", (unsigned long long) pthread_self(), __FILE__, __LINE__, __func__); \
 	if (bufoff < sizeof(buf)) { \
 		bufoff += snprintf(buf + bufoff, sizeof(buf) - bufoff, x); \
@@ -65,10 +64,13 @@ int appfs_debug_fd = STDERR_FILENO;
 	if (bufoff > sizeof(buf)) { \
 		bufoff = sizeof(buf); \
 	}; \
-	write(appfs_debug_fd, buf, bufoff); \
+	fprintf(appfs_debug_fd, "%.*s", bufoff, buf); \
+	fflush(appfs_debug_fd); \
 }
+#define APPFS_ERROR(x...) APPFS_DEBUG(x)
 #else
 #define APPFS_DEBUG(x...) /**/
+#define APPFS_ERROR(x...) fprintf(stderr, x); fprintf(stderr, "\n");
 #endif
 
 /*
@@ -97,7 +99,7 @@ pthread_mutex_t appfs_path_info_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 int appfs_path_info_cache_size = 8209;
 struct appfs_pathinfo *appfs_path_info_cache = NULL;
 
-#ifndef TCL_THREADS
+#if !defined(TCL_THREADS) || TCL_THREADS != 1
 /*
  * Handle unthreaded Tcl
  */
@@ -174,7 +176,7 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		interp = Tcl_CreateInterp();
 	)
 	if (interp == NULL) {
-		fprintf(stderr, "Unable to create Tcl Interpreter.  Aborting.\n");
+		APPFS_ERROR("Unable to create Tcl Interpreter.  Aborting.");
 
 		if (error_string) {
 			*error_string = strdup("Unable to create Tcl interpreter.");
@@ -189,9 +191,9 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		tcl_ret = Tcl_Init(interp);
 	)
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl.  Aborting.\n");
+		APPFS_ERROR("Unable to initialize Tcl.  Aborting.");
 		appfs_call_libtcl(
-			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+			APPFS_ERROR("Tcl Error is: %s", Tcl_GetStringResult(interp));
 		)
 
 		if (error_string) {
@@ -213,9 +215,9 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		tcl_ret = Tcl_Eval(interp, "package ifneeded sha1 1.0 [list load {} sha1]");
 	)
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl SHA1.  Aborting.\n");
+		APPFS_ERROR("Unable to initialize Tcl SHA1.  Aborting.");
 		appfs_call_libtcl(
-			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+			APPFS_ERROR("Tcl Error is: %s", Tcl_GetStringResult(interp));
 		)
 
 		if (error_string) {
@@ -237,9 +239,9 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		tcl_ret = Tcl_Eval(interp, "package ifneeded appfsd 1.0 [list load {} appfsd]");
 	)
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl AppFS Package.  Aborting.\n");
+		APPFS_ERROR("Unable to initialize Tcl AppFS Package.  Aborting.");
 		appfs_call_libtcl(
-			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+			APPFS_ERROR("Tcl Error is: %s", Tcl_GetStringResult(interp));
 		)
 
 		if (error_string) {
@@ -266,9 +268,9 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		"");
 	appfs_call_libtcl_exit
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl PKI.  Aborting.\n");
+		APPFS_ERROR("Unable to initialize Tcl PKI.  Aborting.");
 		appfs_call_libtcl(
-			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+			APPFS_ERROR("Tcl Error is: %s", Tcl_GetStringResult(interp));
 		)
 
 		if (error_string) {
@@ -297,9 +299,9 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		"");
 	appfs_call_libtcl_exit
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl AppFS script.  Aborting.\n");
+		APPFS_ERROR("Unable to initialize Tcl AppFS script.  Aborting.");
 		appfs_call_libtcl(
-			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+			APPFS_ERROR("Tcl Error is: %s", Tcl_GetStringResult(interp));
 		)
 
 		if (error_string) {
@@ -324,7 +326,7 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		tcl_setvar_ret = Tcl_SetVar(interp, "::appfs::cachedir", appfs_cachedir, TCL_GLOBAL_ONLY);
 	)
 	if (tcl_setvar_ret == NULL) {
-		fprintf(stderr, "Unable to set cache directory.  This should never fail.\n");
+		APPFS_ERROR("Unable to set cache directory.  This should never fail.");
 
 		if (error_string) {
 			appfs_call_libtcl(
@@ -349,9 +351,9 @@ static Tcl_Interp *appfs_create_TclInterp(char **error_string) {
 		tcl_ret = Tcl_Eval(interp, "::appfs::init");
 	)
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.\n");
+		APPFS_ERROR("Unable to initialize Tcl AppFS script (::appfs::init).  Aborting.");
 		appfs_call_libtcl(
-			fprintf(stderr, "Tcl Error is: %s\n", Tcl_GetStringResult(interp));
+			APPFS_ERROR("Tcl Error is: %s", Tcl_GetStringResult(interp));
 		)
 
 		if (error_string) {
@@ -566,6 +568,11 @@ static void appfs_simulate_user_fs_leave(void) {
 	setfsgid(0);
 }
 
+#ifdef APPFS_NO_GETPWUID
+static char *appfs_get_homedir(uid_t fsuid) {
+	return(NULL);
+}
+#else
 /*
  * Look up the home directory for a given UID
  *        Returns a C string containing the user's home directory or NULL if
@@ -618,6 +625,7 @@ static char *appfs_get_homedir(uid_t fsuid) {
 
 	return(retval);
 }
+#endif
 
 /*
  * Generate an inode for a given path.  The inode should be computed in such
@@ -1521,7 +1529,18 @@ static int appfs_fuse_read(const char *path, char *buf, size_t size, off_t offse
 	retval = 0;
 
 	while (size != 0) {
+#ifdef APPFS_NO_PREAD /* XXX:TODO: Write a wrapper function */
+		off_t seek_ret;
+
+		seek_ret = lseek(fi->fh, offset, SEEK_SET);
+		if (seek_ret == offset) {
+			read_ret = read(fi->fh, buf, size);
+		} else {
+			read_ret = -1;
+		}
+#else
 		read_ret = pread(fi->fh, buf, size, offset);
+#endif
 
 		if (read_ret < 0) {
 			APPFS_DEBUG("error: read failed");
@@ -1567,7 +1586,23 @@ static int appfs_fuse_write(const char *path, const char *buf, size_t size, off_
 	retval = 0;
 
 	while (size != 0) {
+#ifdef APPFS_NO_PWRITE /* XXX:TODO: Write a wrapper function */
+#  if 1
+		/* XXX:TODO: Still fails on win32 */
+		write_ret = -1;
+#else
+		off_t seek_ret;
+
+		seek_ret = lseek(fi->fh, offset, SEEK_SET);
+		if (seek_ret == offset) {
+			write_ret = write(fi->fh, buf, size); 
+		} else {
+			write_ret = -1;
+		}
+#  endif
+#else
 		write_ret = pwrite(fi->fh, buf, size, offset);
+#endif
 
 		if (write_ret < 0) {
 			APPFS_DEBUG("error: write failed");
@@ -1839,7 +1874,7 @@ static int appfs_sqlite3(const char *sql) {
 
 	interp = appfs_create_TclInterp(NULL);
 	if (interp == NULL) {
-		fprintf(stderr, "Unable to create a Tcl interpreter.  Aborting.\n");
+		APPFS_ERROR("Unable to create a Tcl interpreter.  Aborting.");
 
 		return(1);
 	}
@@ -1848,7 +1883,7 @@ static int appfs_sqlite3(const char *sql) {
 	sql_ret = Tcl_GetStringResult(interp);
 
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "[error] %s\n", sql_ret);
+		APPFS_ERROR("[error] %s", sql_ret);
 
 		return(1);
 	}
@@ -1870,7 +1905,7 @@ static int appfs_tcl(const char *tcl) {
 
 	interp = appfs_create_TclInterp(NULL);
 	if (interp == NULL) {
-		fprintf(stderr, "Unable to create a Tcl interpreter.  Aborting.\n");
+		APPFS_ERROR("Unable to create a Tcl interpreter.  Aborting.");
 
 		return(1);
 	}
@@ -1879,7 +1914,7 @@ static int appfs_tcl(const char *tcl) {
 	tcl_result = Tcl_GetStringResult(interp);
 
 	if (tcl_ret != TCL_OK) {
-		fprintf(stderr, "[error] %s\n", Tcl_GetVar(interp, "errorInfo", TCL_GLOBAL_ONLY));
+		APPFS_ERROR("[error] %s", Tcl_GetVar(interp, "errorInfo", TCL_GLOBAL_ONLY));
 
 		return(1);
 	}
@@ -2020,6 +2055,13 @@ static int Appfsd_Init(Tcl_Interp *interp) {
 	return(TCL_OK);
 }
 
+#ifdef APPFS_NO_SIGNALS
+static void appfs_set_sighandler(void) {
+	return;
+}
+#else
+#include <signal.h>
+
 /*
  * Hot-restart support
  */
@@ -2052,6 +2094,19 @@ static void appfs_signal_handler(int sig) {
 	return;
 }
 
+static void appfs_set_sighandler(void) {
+	void *signal_ret;
+
+	/*
+	 * Register a signal handler for hot-restart requests
+	 */
+	signal_ret = signal(SIGHUP, appfs_signal_handler);
+	if (signal_ret == SIG_ERR) {
+		APPFS_ERROR("Unable to install signal handler for hot-restart");
+		APPFS_ERROR("Hot-restart will not be available.");
+	}
+}
+#endif
 /*
  * Terminate a thread
  */
@@ -2105,7 +2160,7 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 	/*
 	 * Default values
 	 */
-#ifdef TCL_THREADS
+#if defined(TCL_THREADS) && TCL_THREADS == 1
 	appfs_threaded_tcl = 1;
 #else
 	appfs_threaded_tcl = 0;
@@ -2164,7 +2219,7 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 					} else if (strcmp(optstr, "rw") == 0) {
 						/* Ignored */
 					} else {
-						fprintf(stderr, "appfsd: invalid option: \"-o %s\"\n", optstr);
+						APPFS_ERROR("appfsd: invalid option: \"-o %s\"", optstr);
 
 						free(optstr_s);
 
@@ -2204,9 +2259,9 @@ static int appfs_opt_parse(int argc, char **argv,  struct fuse_args *args) {
 
 	if ((optind + 2) != argc) {
 		if ((optind + 2) < argc) {
-			fprintf(stderr, "Too many arguments\n");
+			APPFS_ERROR("Too many arguments");
 		} else {
-			fprintf(stderr, "Missing cachedir or mountpoint\n");
+			APPFS_ERROR("Missing cachedir or mountpoint");
 		}
 
 		appfs_print_help(stderr);
@@ -2250,6 +2305,55 @@ static struct fuse_operations appfs_operations = {
 	.symlink   = appfs_fuse_symlink,
 };
 
+
+#ifdef APPFS_NO_RLIMIT
+static void appfs_set_resource_limits(void) {
+	return;
+}
+#else
+#include <sys/resource.h>  
+
+static void appfs_set_resource_limits(void) {
+	struct rlimit number_open_files;
+	rlim_t number_open_files_max;
+	int rlimit_ret;
+
+	/*
+	 * Increase resource limits for number of open files
+	 * to the maximum values, since we may be asked to
+	 * hold open many files on behalf of many other processes
+	 */
+	number_open_files.rlim_cur = number_open_files.rlim_max = RLIM_INFINITY;
+
+	rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
+
+	if (rlimit_ret != 0) {
+		rlimit_ret = getrlimit(RLIMIT_NOFILE, &number_open_files);
+		if (rlimit_ret == 0) {
+			number_open_files_max = number_open_files.rlim_max;
+
+			if (number_open_files_max < (1024 * 1024)) {
+				number_open_files.rlim_cur = number_open_files.rlim_max = 1024 * 1024;
+
+				rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
+			} else {
+				number_open_files.rlim_cur = number_open_files.rlim_max;
+			}
+
+			rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
+
+			if (rlimit_ret != 0 && number_open_files.rlim_cur != number_open_files_max) {
+				number_open_files.rlim_cur = number_open_files.rlim_max = number_open_files_max;
+
+				setrlimit(RLIMIT_NOFILE, &number_open_files);
+			}
+		}
+	}
+
+	return;
+}
+#endif
+
 /*
  * Entry point into this program.
  */
@@ -2257,11 +2361,9 @@ int main(int argc, char **argv) {
 	Tcl_Interp *test_interp;
 	char *test_interp_error;
 	struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
-	struct rlimit number_open_files;
-	int pthread_ret, aop_ret, rlimit_ret;
-	void *signal_ret;
+	int pthread_ret, aop_ret;
 	char *argv0;
-	rlim_t number_open_files_max;
+int i;
 
 	/*
 	 * Skip passed program name
@@ -2306,7 +2408,7 @@ int main(int argc, char **argv) {
 	 */
 	pthread_ret = pthread_key_create(&interpKey, appfs_terminate_interp_and_thread);
 	if (pthread_ret != 0) {
-		fprintf(stderr, "Unable to create TSD key for Tcl.  Aborting.\n");
+		APPFS_ERROR("Unable to create TSD key for Tcl.  Aborting.");
 
 		return(1);
 	}
@@ -2338,15 +2440,6 @@ int main(int argc, char **argv) {
 	 */
 	if (argc == 2 && strcmp(argv[0], "--tcl") == 0) {
 		return(appfs_tcl(argv[1]));
-	}
-
-	/*
-	 * Register a signal handler for hot-restart requests
-	 */
-	signal_ret = signal(SIGHUP, appfs_signal_handler);
-	if (signal_ret == SIG_ERR) {
-		fprintf(stderr, "Unable to install signal handler for hot-restart\n");
-		fprintf(stderr, "Hot-restart will not be available.\n");
 	}
 
 	/*
@@ -2382,8 +2475,8 @@ int main(int argc, char **argv) {
 			test_interp_error = "Unknown error";
 		}
 
-		fprintf(stderr, "Unable to initialize Tcl interpreter for AppFSd:\n");
-		fprintf(stderr, "%s\n", test_interp_error);
+		APPFS_ERROR("Unable to initialize Tcl interpreter for AppFSd:");
+		APPFS_ERROR("%s", test_interp_error);
 
 		return(1);
 	}
@@ -2394,38 +2487,8 @@ int main(int argc, char **argv) {
 		Tcl_FinalizeNotifier(NULL);
 	}
 
-	/*
-	 * Increase resource limits for number of open files
-	 * to the maximum values, since we may be asked to
-	 * hold open many files on behalf of many other processes
-	 */
-	number_open_files.rlim_cur = number_open_files.rlim_max = RLIM_INFINITY;
-
-	rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
-
-	if (rlimit_ret != 0) {
-		rlimit_ret = getrlimit(RLIMIT_NOFILE, &number_open_files);
-		if (rlimit_ret == 0) {
-			number_open_files_max = number_open_files.rlim_max;
-
-			if (number_open_files_max < (1024 * 1024)) {
-				number_open_files.rlim_cur = number_open_files.rlim_max = 1024 * 1024;
-
-				rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
-			} else {
-				number_open_files.rlim_cur = number_open_files.rlim_max;
-			}
-
-			rlimit_ret = setrlimit(RLIMIT_NOFILE, &number_open_files);
-
-			if (rlimit_ret != 0 && number_open_files.rlim_cur != number_open_files_max) {
-				number_open_files.rlim_cur = number_open_files.rlim_max = number_open_files_max;
-
-				setrlimit(RLIMIT_NOFILE, &number_open_files);
-			}
-		}
-	}
-
+	appfs_set_resource_limits();
+	appfs_set_sighandler();
 
 	/*
 	 * Enter the FUSE main loop -- this will process any arguments
