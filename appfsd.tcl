@@ -279,8 +279,8 @@ namespace eval ::appfs {
 		lappend ::appfs::trusted_cas [::pki::x509::parse_cert {
 -----BEGIN CERTIFICATE-----
 MIIC7DCCAdSgAwIBAgIBATANBgkqhkiG9w0BAQUFADAvMRIwEAYDVQQKEwlSb3kg
-S2VlbmUxGTAXBgNVBAMTEEFwcEZTIEtleSBNYXN0ZXIwHhcNMTQxMTE3MjAxNzI4
-WhcNMTkxMTE3MjAxNzI4WjAvMRIwEAYDVQQKEwlSb3kgS2VlbmUxGTAXBgNVBAMT
+S2VlbmUxGTAXBgNVBAMTEEFwcEZTIEtleSBNYXN0ZXIwHhcNMTkxMjEyMjM1OTIz
+WhcNMzQxMjEyMjM1OTIzWjAvMRIwEAYDVQQKEwlSb3kgS2VlbmUxGTAXBgNVBAMT
 EEFwcEZTIEtleSBNYXN0ZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
 AQCq6uSK46yG5b6RJWwRlvw5glAnjsc1GiX3duXA0vG4qnKUnDtl/jcMmq2GMOB9
 Iy1tjabEHA0MhW2j7Vwe/O9MLFJkJ30M1PVD7YZRRNaAsz3UWIKEjPI7BBc32KOm
@@ -288,12 +288,12 @@ BL3CTXCCdzllL1HhVbnM5iCAmgHcg1DUk/EvWXvnEDxXRy2lV9mQsmDedrffY7Wl
 Or57nlczaMuPLpyRSkv75PAnjQJxT3sWlBpy+/H9ImudQdpJNf/FtxcqN7iDwH5B
 vIceYEtDVxFsvo5HOVkSl9jeo5E4Gpe3wyfRhoqB2UkaW1Kq0iH5R+00S760xQMx
 LL9L1duhu1dL7HsmEw7IeYURAgMBAAGjEzARMA8GA1UdEwEB/wQFMAMBAf8wDQYJ
-KoZIhvcNAQEFBQADggEBAKhO4ZSzYP37BqixNHKK9+gSeC6Fga85iLWhwpPW0kSl
-z03hal80KZ+kPMzb8C52N283tQNAqJ9Q8akDPZxSzzMUVOGpGw2pJ7ZswKDz0ZTa
-0edq/gdT/HrdegvNtDPc2jona5FVOYqwdcz5kbl1UWBaBp3VXUgcYjXSRaBK43Wd
-cveiDUeZw7gHqRSN/AyYUCtJzWmvGsJuIFhMBonuz8jylhyMJCYJFT4iMUC8MNIw
-niX1xx+Nu6fPV5ZZHj9rbhiBaLjm+tkDwtPgA3j2pxvHKYptuWxeYO+9DDNa9sCb
-E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
+KoZIhvcNAQEFBQADggEBAIQW2OHDS9rIZUqaFdRqthqhYxESi9Yz9SO1LHWJ6WyS
+edqkMIWnXaC2Gq8JTCLcIwK4VRvDqwuHz2TQj9cqbQ+FrnxtSM3kVXrsfehD4cqz
+pMNKfoi+XaPefB9YbSBbcI4IvOPbPHtZz9++pW5vUwKjp3BiA1xNL9x9SnoehMEd
+BQM75CMQckwmnlII1yhStRDCcgIaMpv7L6vutmvdvN0QMJKnX/5papLrdiHu1Nt7
+bSf8agpRgIQKKSyuwFjp3zT8oeAzEzL4HdOBCveQ5EamCqvV6EDIuIR7b+4ZnYoL
+3qh0YRO/9jrtb786iqWGexZ1JBjiSMhYA1CcvJtR/vQ=
 -----END CERTIFICATE-----
 }]
 
@@ -738,9 +738,12 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		array set pathinfo [_parsepath $path]
 		array set retval [list]
 
-		catch {
+		set fetchIndexError "no fetch error"
+		if {[catch {
 			::appfs::getindex $pathinfo(hostname)
 			::appfs::getpkgmanifest $pathinfo(hostname) $pathinfo(package_sha1)
+		} fetchIndexErrorRaw]} {
+			set fetchIndexError $fetchIndexErrorRaw
 		}
 
 		set retval(path_type) $pathinfo(_type)
@@ -898,7 +901,7 @@ E5AnJIlOnd/tGe0Chf0sFQg+l9nNiNrWGgzdd9ZPJK4=
 		}
 
 		if {![info exists retval(type)]} {
-			return -code error "No such file or directory"
+			return -code error "No such file or directory ($fetchIndexError)"
 		}
 
 		return [array get retval]
