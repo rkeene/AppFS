@@ -22,6 +22,8 @@
 # THE SOFTWARE.
 #
 
+PATH="${PATH}:$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 appfsd_options=()
 if [ "$1" == "--cachedir" ]; then
 	appfsd_options=("${appfsd_options[@]}" '--cachedir' "$2")
@@ -45,6 +47,41 @@ function remove_site() {
 	call_appfsd --sqlite3 'DELETE FROM sites WHERE hostname = '"'$site'"'; DELETE FROM packages WHERE hostname = '"'$site'"';' || return 1
 
 	clean
+}
+
+function mirror() {
+	local site destinationDir
+	local baseURL index
+	local packageList
+
+	local marker
+
+	site="$1"
+	destinationDir="$2"
+
+	baseURL="http://${site}/appfs"
+	index="${baseURL}/index"
+
+	if [ ! -e "${destinationDir}" ]; then
+		mkdir "${destinationDir}" || return 1
+	fi
+
+	marker="$(openssl rand 20 -hex)"
+
+	(
+		cd "${destinationDir}" || exit 1
+
+		# XXX:TODO: This does not validate the signature
+		curl -sSL "${index}" > "index.${marker}"
+
+		packageListHash="$(cat "index.${marker}" | cut -f 1 -d ,)"
+		packageListHashMethod="$(cat "index.${marker}" | cut -f 2 -d ,)"
+		#curl -sSL "${...}"
+
+		mv "index.${marker}" index
+	) || return 1
+
+	return 0
 }
 
 function clean() {
@@ -127,9 +164,10 @@ function install() {
 	return 0
 }
 
-case "$1" in
+operation="$1"
+shift
+case "$operation" in
 	install)
-		shift
 		install "$@" || exit 1
 		exit 0
 		;;
@@ -137,16 +175,30 @@ case "$1" in
 		invalidate || exit 1
 		;;
 	remove-site)
-		remove_site "$2" || exit 1
+		remove_site "$@" || exit 1
 		;;
 	clean)
 		clean || exit 1
 		;;
 	clear)
-		clear "$2" || exit 1
+		clear "$@" || exit 1
+		;;
+	hoard)
+		echo "not implemented" >&2
+		exit 1
+
+		hoard "$@" || exit 1
+		exit 0
+		;;
+	mirror)
+		echo "not implemented" >&2
+		exit 1
+
+		mirror "$@" || exit 1
+		exit 0
 		;;
 	*)
-		echo "Usage: appfs-cache {invalidate|clean|clear|clear <package>|remove-site <site>}" >&2
+		echo "Usage: appfs-cache {invalidate|clean|clear|clear <package>|remove-site <site>|hoard <package>|mirror <site> <dir>}" >&2
 
 		exit 1
 		;;
