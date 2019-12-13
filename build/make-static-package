@@ -7,9 +7,9 @@ fuse_version='2.9.7'
 fuse_url="https://github.com/libfuse/libfuse/releases/download/fuse-${fuse_version}/fuse-${fuse_version}.tar.gz"
 fuse_sha256='832432d1ad4f833c20e13b57cf40ce5277a9d33e483205fc63c78111b3358874'
 
-kitcreator_version='0.10.0'
+kitcreator_version='0.11.1'
 kitcreator_url="http://rkeene.org/devel/kitcreator-${kitcreator_version}.tar.gz"
-kitcreator_sha256='ac815b74709d27791021099418cf16c2ff7f5096d3fb7b17c50e6742f5a1a2bb'
+kitcreator_sha256='211f8c21489a5b8e3b2785ce7e279e3b5f107fc3f99e02b5d2c801005ade8217'
 
 ###############################
 ## USER SUPPLIED ##############
