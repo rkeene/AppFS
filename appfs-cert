@@ -22,6 +22,8 @@
 # THE SOFTWARE.
 #
 
+PATH="${PATH}:$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 appfsd_options=()
 
 CA_CERT_FILE='AppFS_CA.crt'
@@ -74,24 +76,34 @@ package require pki
 set filename_cert $::env(CA_CERT_FILE)
 set filename_key  $::env(CA_KEY_FILE)
 
-puts -nonewline "Generating RSA Key..."
-flush stdout
-set key [pki::rsa::generate 2048]
-puts " Done."
+if {[file exists $filename_key]} {
+	set replace_key false
+
+	set key [pki::pkcs::parse_key [read [open $filename_key]] $env(CA_PASSWORD)]
+} else {
+	set replace_key true
+
+	puts -nonewline "Generating RSA Key..."
+	flush stdout
+	set key [pki::rsa::generate 2048]
+	puts " Done."
+}
 
 lappend key subject "O=$::env(CA_DN_S_O),CN=$::env(CA_DN_S_CN)"
 
-set ca [pki::x509::create_cert $key $key 1 [clock seconds] [clock add [clock seconds] 5 years] 1 [list] 1]
+set ca [pki::x509::create_cert $key $key 1 [clock seconds] [clock add [clock seconds] 15 years] 1 [list] 1]
 
 puts "Writing \"$filename_cert\""
 set fd [open $filename_cert w 0644]
 puts $fd $ca
 close $fd
 
-puts "Writing \"$filename_key\""
-set fd [open $filename_key w 0400]
-puts $fd [pki::key $key $::env(CA_PASSWORD)]
-close $fd
+if {$replace_key} {
+	puts "Writing \"$filename_key\""
+	set fd [open $filename_key w 0400]
+	puts $fd [pki::key $key $::env(CA_PASSWORD)]
+	close $fd
+}
 '
 }
 
