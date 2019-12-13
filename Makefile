@@ -42,15 +42,15 @@ sha1.o: sha1.c sha1.tcl.h
 
 pki.tcl:
 	rm -f pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/asn/asn.tcl?name=aea6802a16e69c9f2d4f5eca20fdc23174609731 > pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/aes/aes.tcl?name=94452b42b4ca98298ab1465c40fd87d11a40cf5e >> pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/des/tcldes.tcl?name=ffea6ca6eb4468c0edef7a745b1dadc632ff5aeb >> pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/des/des.tcl?name=5d8f3a7c1a6ea88ee988652643db8f06038aff49 >> pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/math/bignum.tcl?name=3bc84d9b1f18c2e7360573381317c4dc9af731f9 >> pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/md5/md5x.tcl?name=3cddfa803d680a79ab7dfac90edfd751f3d4fadd >> pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/sha1/sha256.tcl?name=1fd001eb65e88c823b980456726079deae3512df >> pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/base64/base64.tcl?name=812f146bfc1a12bb863a7a845548b9eef9cd6573 >> pki.tcl.new
-	curl http://core.tcl.tk/tcllib/raw/modules/pki/pki.tcl?name=8318fd31981dcc00bfadd6c427518f9d71a12b34 >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/asn/asn.tcl?name=aea6802a16e69c9f2d4f5eca20fdc23174609731 > pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/aes/aes.tcl?name=94452b42b4ca98298ab1465c40fd87d11a40cf5e >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/des/tcldes.tcl?name=ffea6ca6eb4468c0edef7a745b1dadc632ff5aeb >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/des/des.tcl?name=5d8f3a7c1a6ea88ee988652643db8f06038aff49 >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/math/bignum.tcl?name=3bc84d9b1f18c2e7360573381317c4dc9af731f9 >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/md5/md5x.tcl?name=3cddfa803d680a79ab7dfac90edfd751f3d4fadd >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/sha1/sha256.tcl?name=1fd001eb65e88c823b980456726079deae3512df >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/base64/base64.tcl?name=812f146bfc1a12bb863a7a845548b9eef9cd6573 >> pki.tcl.new
+	curl -L https://core.tcl-lang.org/tcllib/raw/modules/pki/pki.tcl?name=8318fd31981dcc00bfadd6c427518f9d71a12b34 >> pki.tcl.new
 	openssl sha1 pki.tcl.new | grep 'aad7cca08cca00c8f7cd6eccc46e61da235753fc' >/dev/null
 	mv pki.tcl.new pki.tcl
 
