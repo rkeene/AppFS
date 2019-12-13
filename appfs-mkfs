@@ -24,8 +24,16 @@
 
 PATH="${PATH}:$(cd "$(dirname "$(which "$0")")" && pwd)"
 
-if [ "$1" == '--cpio' ]; then
+if [ "$1" = '--cpio' ]; then
 	shift
+
+	if [ "$1" = '--beta' ]; then
+		shift
+
+		setLatest=0
+	else
+		setLatest=1
+	fi
 
 	mode='file'
 
@@ -48,7 +56,7 @@ if [ -n "${sitecert}" ]; then
 fi
 
 if [ -z "${pkgsdir}" -a -z "${pkgfile}" ] || [ -z "${appfsdir}" ]; then
-	echo 'Usage: appfs-mk {--cpio <pkgfile>|<pkgsdir>} <appfsdir> [<site-key> [<site-certificate>]]' >&2
+	echo 'Usage: appfs-mk {--cpio [--beta] <pkgfile>|<pkgsdir>} <appfsdir> [<site-key> [<site-certificate>]]' >&2
 
 	exit 1
 fi
@@ -153,7 +161,7 @@ case "${mode}" in
 		# If this archive contains exactly one package mark it as the latest version
 		chk_package="$(echo *)"
 		if [ -d "${chk_package}" ]; then
-			default_isLatest='1'
+			default_isLatest="${setLatest:-1}"
 		fi
 
 		cat "${oldpackagelistfile}" 2>/dev/null | (
