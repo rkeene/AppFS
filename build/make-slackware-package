@@ -1,9 +1,18 @@
 #! /usr/bin/env bash
 
 version="$1"
+url="$2"
+
+if [ -z "${version}" ]; then
+	echo 'usage: make-slackware-package <version> [<url>]' >&2
+	exit 1
+fi
+if [ -z "${url}" ]; then
+	url="http://rkeene.org/devel/appfs/appfs-${version}.tar.gz"
+fi
+
 version_release='1'
 platform="$(uname -m)"
-url="http://rkeene.org/devel/appfs/appfs-${version}.tar.gz"
 make_args=(
 	prefix=/usr
 	sbindir=/sbin
@@ -35,7 +44,14 @@ mkdir "${workdir}" || exit 1
 
 	installdir="$(pwd)/installed"
 
-	wget -O appfs.tar.gz "${url}"
+	case "${url}" in
+		*tp://*)
+			wget -O appfs.tar.gz "${url}"
+			;;
+		*)
+			cp "${url}" appfs.tar.gz
+			;;
+	esac
 	tar -xf appfs.tar.gz || exit 1
 
 	cd "appfs-${version}" || exit 1

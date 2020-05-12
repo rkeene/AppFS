@@ -1,0 +1,28 @@
+#! /usr/bin/env bash
+
+version="$1"
+
+if [ -z "${version}" ]; then
+	echo 'usage: post-release-upload <version>' >&2
+	exit 1
+fi
+
+srcdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
+tarball="${srcdir}/../archive/appfs/appfs-${version}.tar.gz"
+
+set -ex -o pipefail
+cd "${srcdir}/build" 
+
+# Build the Slackware package
+./make-slackware-package "${version}" "${tarball}"
+platform="$(uname -m)"
+slackware_package="appfs-${version}-${platform}-1.txz"
+
+# Build the Static package for Linux/x86_64
+./make-static-package "${tarball}" 'x86_64-generic-linux-musl'
+static_package="appfs-${version}-linux-x86_64.tar.gz"
+
+# Add the artifacts to Fossil
+fossil uv add "${slackware_package}" --as "releases/${version}/${slackware_package}"
+fossil uv add "${static_package}" --as "releases/${version}/${static_package}"
+fossil uv add "${tarball}" --as "releases/${version}/appfs-${version}.tar.gz"
