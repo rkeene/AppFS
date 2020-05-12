@@ -989,7 +989,7 @@ bSf8agpRgIQKKSyuwFjp3zT8oeAzEzL4HdOBCveQ5EamCqvV6EDIuIR7b+4ZnYoL
 		} err
 
 		if {![info exists info]} {
-			if {$err == "No such file or directory"} {
+			if {[string match "No such file or directory*" $err]} {
 				return [list]
 			} else {
 				return -code error $err
