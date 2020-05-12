@@ -27,7 +27,7 @@ package="appfs-${version}-${platform}-${version_release}.txz"
 mkdir "${workdir}" || exit 1
 
 (
-	PATH="${PATH}:/sbin"
+	PATH="${PATH}:/sbin:/opt/appfs/rkeene.org/tardy/platform/latest/bin"
 
 	set -x
 
@@ -63,6 +63,7 @@ _EOF_
 	makepkg -c n -l y "../${package}" || exit 1
 
 	if [ "$(id -u)" != '0' ]; then
+		set -o pipefail
 		xz -dc "../${package}" | tardy -User 0 -Group 0 | xz -9c > "../${package}.new" || exit 1
 		mv "../${package}.new" "../${package}" || exit 1
 	fi
