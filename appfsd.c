@@ -47,11 +47,20 @@
 /* Debugging macros */
 #ifdef DEBUG
 FILE *appfs_debug_fd = NULL;
+
+#ifndef APPFS_DEBUG_FD
+#  ifdef APPFS_DEBUG_FILE
+#    define APPFS_DEBUG_FD fopen(APPFS_DEBUG_FILE, "a")
+#  else
+#    define APPFS_DEBUG_FD fopen("/tmp/appfsd.log", "a")
+#  endif
+#endif
+
 #define APPFS_DEBUG(x...) { \
 	char buf[8192]; \
 	int bufoff = 0; \
 	if (appfs_debug_fd == NULL) { \
-		appfs_debug_fd = fopen("/tmp/appfsd.log", "a"); \
+		appfs_debug_fd = APPFS_DEBUG_FD; \
 	}; \
 	if (appfs_debug_fd == NULL) { appfs_debug_fd = stderr; } \
 	bufoff = snprintf(buf, sizeof(buf), "[debug] [t=%llx] %s:%i:%s: ", (unsigned long long) pthread_self(), __FILE__, __LINE__, __func__); \
@@ -2371,6 +2380,9 @@ int i;
 	if (argc == 0 || argv == NULL) {
 		return(1);
 	}
+for (i = 0; i < argc; i++) {
+//	printf("argv[%i] = \"%s\"\n", i, argv[i]);
+}
 
 	argv0 = argv[0];
 
